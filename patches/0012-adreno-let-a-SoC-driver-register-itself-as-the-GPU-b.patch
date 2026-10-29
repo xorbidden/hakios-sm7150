@@ -1,0 +1,243 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: xorbidden <xorbidden@proton.me>
+Date: Thu, 29 Oct 2026 13:11:36 +0100
+Subject: [PATCH] adreno: let a SoC driver register itself as the GPU backend
+
+HakiosGPU and the address allocator in hakios.adreno.c are not
+specific to the Adreno 642L, but the hardware half is, and its bring-up
+runs on gpu=1 at the SC7280's addresses. A port with another Adreno
+(the SM7150's A618) had to edit this file to reroute every
+hakios_gpu_* call.
+
+Add struct hakios_gpu_backend and hakios_gpu_backend_register(). With
+a backend registered:
+- hakios_adreno_init() runs the backend's init instead of this file's
+  steps, so gpu= and adreno= never touch the 642L's registers;
+- every hakios_gpu_* call that touches the hardware (parameter, map,
+  mapped, unmap, done, last, worked, submit, report, stop) and
+  hakios_adreno_quiesce() go to the backend;
+- the allocator, cache maintenance and HakiosGPU stay shared;
+  hakios_gpu_backend_kept() resets the allocator and starts the
+  service once the backend's GPU is up.
+Without a backend nothing changes.
+
+Tested: the kernel builds with and without a backend (davinci and
+redwood configurations); the A618 backend is not yet run on the phone
+in this layout.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ drivers/gpu/hakios.adreno.c | 97 +++++++++++++++++++++++++++++++++++--
+ 1 file changed, 94 insertions(+), 3 deletions(-)
+
+diff --git a/drivers/gpu/hakios.adreno.c b/drivers/gpu/hakios.adreno.c
+index 3f1f97a..edd91ba 100644
+--- a/drivers/gpu/hakios.adreno.c
++++ b/drivers/gpu/hakios.adreno.c
+@@ -3124,6 +3124,33 @@ gpu_block_stop(void)
+ 	}
+ }
+ 
++/*
++ * Another Adreno, driven by a SoC's own driver (devices/<name>/soc/drivers/gpu/: another generation, other addresses), is
++ * kept for HakiosGPU through these same functions: the driver registers a backend when the kernel starts, and from then
++ * on this file's own steps are not run (gpu=1 and adreno=N are the backend's) and each hakios_gpu_* below hands over to
++ * the backend's. What is not the GPU's -- the allocator of the 3D core's addresses, the cache maintenance, the service
++ * itself -- stays here and is shared. With no backend nothing changes.
++ */
++struct hakios_gpu_backend {
++	const char *    name;
++	void            (*init)(void);                  /* from hakios_adreno_init(): its steps; hakios_gpu_backend_kept() when kept */
++	bool            (*kept)(void);
++	bool            (*parameter)(uint32_t which, uint64_t *value);
++	bool            (*map)(uint64_t address, uint64_t phys, bool read_only);
++	void            (*mapped)(void);
++	void            (*unmap)(uint64_t address, uint64_t size);
++	bool            (*done)(uint32_t fence);
++	uint32_t        (*last)(void);
++	void            (*worked)(uint64_t *microseconds, uint32_t *submissions, uint32_t by[7]);
++	uint32_t        (*submit)(const uint64_t *addresses, const uint32_t *words, uint32_t count);
++	void            (*report)(const char *why);
++	void            (*stop)(void);                  /* the GPU given back (HakiosGPUStop() holds the clients' lock) */
++	void            (*quiesce)(void);               /* on the way back to the loader, a panic's too */
++};
++void hakios_gpu_backend_register(const struct hakios_gpu_backend *backend);
++void hakios_gpu_backend_kept(void);
++static const struct hakios_gpu_backend *gpu_backend;
++
+ /*
+  * The same when there is no time for asking: the kernel is on its way back to the loader (the
+  * end of a run, a panic). Only the two writes that keep the GMU out of memory that is no longer
+@@ -3132,6 +3159,10 @@ gpu_block_stop(void)
+ void
+ hakios_adreno_quiesce(void)
+ {
++	if (gpu_backend != NULL) {
++		gpu_backend->quiesce();
++		return;
++	}
+ 	if (cx_off) {
+ 		return;
+ 	}
+@@ -3203,6 +3234,25 @@ extern void HakiosGPUStart(void);
+ extern void HakiosGPUStop(void);       /* takes the clients' lock, then calls hakios_gpu_stop() */
+ static void gpu_block_stop(void);
+ 
++
++void
++hakios_gpu_backend_register(const struct hakios_gpu_backend *backend)
++{
++	gpu_backend = backend;
++	printf("adreno: the GPU is %s's (a SoC's own driver)\n", backend->name);
++}
++
++/* The backend's GPU is up and stays on: the addresses all free, the service HakiosGPU started over it. */
++void
++hakios_gpu_backend_kept(void)
++{
++	gpu_free[0].start = GPU_ADDRESSES_START;
++	gpu_free[0].size = GPU_ADDRESSES_SIZE;
++	gpu_free_count = 1;
++	PE_parse_boot_argn("gpu_log", &gpu_log, sizeof(gpu_log));
++	HakiosGPUStart();
++}
++
+ /*
+  * A run that ends in order -- its time is up, the host asks for the end, five fingers on the
+  * screen, a halt: whoever is about to call loader_return() for one of these calls
+@@ -3215,6 +3265,10 @@ static void gpu_block_stop(void);
+ void
+ hakios_gpu_stop(void)
+ {
++	if (gpu_backend != NULL) {
++		gpu_backend->stop();
++		return;
++	}
+ 	if (gpu_kept) {
+ 		uint32_t waited = 0;
+ 
+@@ -3241,7 +3295,7 @@ hakios_adreno_stop(void)
+ {
+ 	uint32_t dirty = 0;
+ 
+-	if (gpu_kept && !(PE_parse_boot_argn("adreno_dirty", &dirty, sizeof(dirty)) && dirty)) {
++	if (hakios_gpu_ready() && !(PE_parse_boot_argn("adreno_dirty", &dirty, sizeof(dirty)) && dirty)) {
+ 		HakiosGPUStop();
+ 	}
+ }
+@@ -3249,13 +3303,16 @@ hakios_adreno_stop(void)
+ bool
+ hakios_gpu_ready(void)
+ {
+-	return gpu_kept;
++	return gpu_backend != NULL ? gpu_backend->kept() : gpu_kept;
+ }
+ 
+ /* The answers to msm's GET_PARAM (Linux's adreno_get_param for this GPU; the numbers are msm_drm.h's). */
+ bool
+ hakios_gpu_parameter(uint32_t which, uint64_t *value)
+ {
++	if (gpu_backend != NULL) {
++		return gpu_backend->parameter(which, value);
++	}
+ 	switch (which) {
+ 	case 0x01:                              /* GPU_ID: none, the chip ID says it */
+ 	case 0x06:                              /* GMEM_BASE */
+@@ -3348,12 +3405,19 @@ hakios_gpu_address_free(uint64_t address, uint64_t size)
+ bool
+ hakios_gpu_map(uint64_t address, uint64_t phys, bool read_only)
+ {
++	if (gpu_backend != NULL) {
++		return gpu_backend->map(address, phys, read_only);
++	}
+ 	return space_map(&core_space, address, phys, PTE_CORE | (read_only ? PTE_READ_ONLY : 0));
+ }
+ 
+ void
+ hakios_gpu_mapped(void)
+ {
++	if (gpu_backend != NULL) {
++		gpu_backend->mapped();
++		return;
++	}
+ 	space_commit(&core_space);
+ }
+ 
+@@ -3362,6 +3426,11 @@ hakios_gpu_unmap(uint64_t address, uint64_t size)
+ {
+ 	uint32_t context = smmu_context(&core_space);
+ 
++	if (gpu_backend != NULL) {
++		gpu_backend->unmap(address, size);
++		return;
++	}
++
+ 	for (uint64_t offset = 0; offset < size; offset += 4096) {
+ 		space_map(&core_space, address + offset, 0, 0);
+ 	}
+@@ -3385,6 +3454,10 @@ hakios_gpu_done(uint32_t fence)
+ {
+ 	volatile uint32_t *word = (volatile uint32_t *)(core_scratch.memory + GPU_FENCE_AT);
+ 
++	if (gpu_backend != NULL) {
++		return gpu_backend->done(fence);
++	}
++
+ 	to_memory((vm_offset_t)word, 4);
+ 	return (int32_t)(*word - fence) >= 0;
+ }
+@@ -3392,7 +3465,7 @@ hakios_gpu_done(uint32_t fence)
+ uint32_t
+ hakios_gpu_last(void)
+ {
+-	return gpu_fence;
++	return gpu_backend != NULL ? gpu_backend->last() : gpu_fence;
+ }
+ 
+ /* The core is to write down what time it is: at one end of submission `fence`. */
+@@ -3447,6 +3520,10 @@ gpu_times(void)
+ void
+ hakios_gpu_worked(uint64_t *microseconds, uint32_t *submissions, uint32_t by[7])
+ {
++	if (gpu_backend != NULL) {
++		gpu_backend->worked(microseconds, submissions, by);
++		return;
++	}
+ 	gpu_times();
+ 	*microseconds = gpu_ticks * 10 / 192;
+ 	*submissions = gpu_timed_count;
+@@ -3466,6 +3543,10 @@ hakios_gpu_submit(const uint64_t *addresses, const uint32_t *words, uint32_t cou
+ {
+ 	uint32_t wanted = 26 + 4 * count, room = 0;
+ 
++	if (gpu_backend != NULL) {
++		return gpu_backend->submit(addresses, words, count);
++	}
++
+ 	for (int i = 0; i < 20000; i++) {
+ 		room = (rd(gpu.base + CP_RB_RPTR) + RING_WORDS - ring_at - 1) % RING_WORDS;
+ 		if (room >= wanted) {
+@@ -3511,6 +3592,11 @@ hakios_gpu_report(const char *why)
+ {
+ 	uint32_t context = smmu_context(&core_space);
+ 
++	if (gpu_backend != NULL) {
++		gpu_backend->report(why);
++		return;
++	}
++
+ 	printf("adreno: gpu: %s: submission %u is the last, the core has done %u; ring: read up to %u, written up to %u; status "
+ 	    "%#x, interrupts %#x; command processor: fault %#x, interrupts %#x, protection %#x\n", why, gpu_fence,
+ 	    *(volatile uint32_t *)(core_scratch.memory + GPU_FENCE_AT), rd(gpu.base + CP_RB_RPTR), ring_at,
+@@ -3765,6 +3851,11 @@ hakios_adreno_init(void)
+ 	uint32_t only = 0, done = 0, failed = 0, keep = 0;
+ 	bool by_itself = false;
+ 
++	if (gpu_backend != NULL) {
++		gpu_backend->init();            /* (gpu=1, adreno=N: this file's own steps are another GPU's) */
++		return;
++	}
++
+ 	if (PE_parse_boot_argn("display_probe", &only, sizeof(only)) && only) {
+ 		display_probe();
+ 	}

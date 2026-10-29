@@ -1,0 +1,7 @@
+# devices/davinci/soc/drivers/gpu/conf: the SM7150 family's GPU (docs/drivers-config.md).
+
+driver A618
+	file    bsd/dev/hakios.a618.c
+	requires ADRENO
+	help    the Adreno 618 with its GMU woken step by step (a618=N) and kept as the common Adreno driver's backend for
+	help    HakiosGPU (gpu=1); needs fw-gpu/ (a630_gmu.bin, a630_sqe.fw, a615_zap.*) from the phone

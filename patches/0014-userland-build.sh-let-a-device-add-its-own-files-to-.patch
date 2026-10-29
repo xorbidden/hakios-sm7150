@@ -1,0 +1,61 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: xorbidden <xorbidden@proton.me>
+Date: Thu, 29 Oct 2026 13:25:44 +0100
+Subject: [PATCH] userland/build.sh: let a device add its own files to the
+ images
+
+The firmware staged into the small image's fw/ and the system image's
+/fw is redwood's (Awinic, WCN6750, the SM7325's MPSS layout). Another
+phone needs other files there: the Mi 9T's speaker container, the
+modem and Wi-Fi images for its second DSP instance, Bluetooth patches,
+the sensors' configuration.
+
+Source ../devices/$DEVICE/userland.sh when the device has one, and call
+its device_root and device_system functions, if defined, after the
+common staging of root/fw and sysroot/fw. $DEVICE comes from the
+environment or the .config's CONFIG_DEVICE. A device without the file
+builds exactly as before.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ userland/build.sh | 13 +++++++++++++
+ 1 file changed, 13 insertions(+)
+
+diff --git a/userland/build.sh b/userland/build.sh
+index c256422..b8d55eb 100755
+--- a/userland/build.sh
++++ b/userland/build.sh
+@@ -79,6 +79,13 @@ set -e
+ linkcopy() { if [ "$(uname)" = Darwin ]; then cp -cRp "$1" "$2"; else cp -al "$1" "$2"; fi; }
+ cd "$(dirname "$(readlink -f "$0")")"
+ source ../xnu-env.sh
++# A device's own files for the images: ../devices/$DEVICE/userland.sh, when the device has one, may define
++# device_root (called with the small image's root/fw/ staged, to add to it) and device_system (the same for the system
++# image's sysroot/fw/). $DEVICE is the environment's, else the .config's CONFIG_DEVICE (make <name>_defconfig).
++DEVICE=${DEVICE:-$(sed -n 's/^CONFIG_DEVICE="\(.*\)"/\1/p' ../.config 2>/dev/null)}
++if [ -n "$DEVICE" ] && [ -f "../devices/$DEVICE/userland.sh" ]; then
++	source "../devices/$DEVICE/userland.sh"
++fi
+ 
+ CC="xnu-clang -arch arm64 -Os -static -nostdlib -ffreestanding -fno-stack-protector -fno-builtin -Wall -Wextra"
+ LD="-Wl,-e,_start -Wl,-pagezero_size,0x100000000"
+@@ -441,6 +448,9 @@ fwhave= fwnone=
+ for d in gpu wifi haptic camera audio; do
+ 	if [ -d ../fw-$d ]; then fwhave="$fwhave $d"; else fwnone="$fwnone $d"; fi
+ done
++if declare -F device_root >/dev/null; then
++	device_root
++fi
+ echo "build.sh: fw/: $(ls -1 root/fw 2>/dev/null | wc -l) files from ../fw-*:${fwhave:- none present}${fwnone:+, absent:$fwnone}"
+ # The images are what somebody would be handed to run this on a second phone, and two of the things
+ # build.sh puts in them are secrets: the Wi-Fi network's name and passphrase, and the host's own
+@@ -600,6 +610,9 @@ if [ -f $IOS/system.manifest ] && [ -f $CACHE/dyld_shared_cache_arm64 ] &&
+ 		mkdir -p sysroot/fw
+ 		cp ../fw-audio/aw882xx_acf.bin sysroot/fw/
+ 	fi
++	if declare -F device_system >/dev/null; then
++		device_system
++	fi
+ 	# the package manager's prefix, when tools/mk-jb.sh has fetched one: the Procursus bootstrap with
+ 	# Sileo in it, as /jb. It cannot live at /var/jb in the image -- /private/var is a memory
+ 	# filesystem made afresh at every boot -- so init copies it there (src/init.c, copy_tree).

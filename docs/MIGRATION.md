@@ -39,6 +39,7 @@ The rule for where a piece goes:
 | Storage through the loader's block service | the common UFS driver, unchanged (`CONFIG_HAKIOS_UFS=y`, `ufs=2`) -- seen on the phone 2026-10-29 |
 | GPU: the Adreno 618 as the common Adreno driver's backend (`gpu=1`) | `soc/drivers/gpu/hakios.a618.c` + patch 0012 -- seen on the phone 2026-10-29 (21 steps, 610 MHz, Mesa draws) |
 | Audio: SM7150 DSP and its modem copy (`adsp=1 adsp_modem=1`), sound over MI2S (`sound=4`), mic on bolero 1.x (`mic=4`), TFA9874 speaker, battery (`battery=1`, common driver) | `soc/drivers/audio/` (`ADSP_SM7150`, `SOUND_SM7150`, `MIC_SM7150`, replacing the common ones), `drivers/audio/hakios.tfa9874.c` (`replaces SPEAKER`), patch 0013 (GUARD split out of SOUND) (built; not yet run) |
+| The phone's firmware in the images (TFA container, modem and Wi-Fi images, BT patch, sensors, camera tables) | `userland.sh` (`device_root`, `device_system`) + patch 0014 (userland/build.sh sources it) |
 | CPU clocks through the OSM (`cpufreq=1`) | `soc/drivers/power/hakios.cpufreq_osm.c`, `replaces CPUFREQ` -- seen on the phone 2026-10-29 |
 
 The SoC's audio drivers are copies of the common ones with the SM7150's changes woven through (memory map, APCS
@@ -57,5 +58,5 @@ own UFS driver's first steps (ufs_alone, ufs_hc_area: never usable). They stay i
 | 10 | Vibration | hk_vibrator.c | `drivers/haptic/hakios.vibrator.c` `replaces HAPTIC` | the PM6150's LDO |
 | 11 | Cameras, flashlight | hk_cam_davinci.c, hk_camera.c, hk_torch.c changes | `drivers/camera/`: `CAM_DAVINCI` `replaces CAMERA`, the PM6150L torch | userland camera_device.c changes too |
 | 12 | Bluetooth | hk_bt.c (WCN3990, bt=5) | `soc/drivers/bluetooth/hakios.bt_wcn3990.c` `replaces BT` | then on with the to-do list: Bluetooth in iOS |
-| 13 | Userland bits | userland/build.sh (fw-bt, ath10k firmware, the network), mkjobs.py, net_test.m, inject*.c, camera_device.c | patches, or the device's own image fragment if upstream has one | |
+| 13 | Userland bits | mkjobs.py, net_test.m, inject*.c (brightness), camera_device.c (the firmware staging is done: userland.sh) | patches, or the device's own image fragment if upstream has one | |
 | 14 | Docs | docs/DAVINCI.md | `docs/` here, and the device's page through device.conf | |

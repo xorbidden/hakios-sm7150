@@ -1,0 +1,8 @@
+# devices/davinci/drivers/camera/conf: the Mi 9T's cameras (docs/drivers-config.md).
+
+driver CAM_DAVINCI
+	file    bsd/dev/hakios.cam_davinci.c
+	replaces CAMERA
+	help    the Mi 9T's cameras for iOS (cam=5; 2 to 4 the bring-up's levels): the IMX582 at the back and the pop-up
+	help    S5K3T2 at the front, through CSIPHY and IFE-lite, in place of the common camera driver. Needs the sensor
+	help    tables of fw-camera/ (userland.sh)

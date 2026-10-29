@@ -1,0 +1,41 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: xorbidden <xorbidden@proton.me>
+Date: Thu, 29 Oct 2026 14:13:57 +0100
+Subject: [PATCH] camera_device: select the stream's camera before the first
+ read
+
+The worker read a frame from whatever camera the kernel had last and
+only then asked for its own. Switching from the front camera to the
+back one therefore started one more front session; on the Mi 9T the
+pop-up camera went up and down again for nothing. Send
+HAKIOS_CAMERA_SENSOR as soon as the device is open; a driver that
+already runs that camera takes it as a no-op.
+
+Tested on the Mi 9T (old port, ddc0ce5): no extra pop-up when
+switching cameras.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ userland/src/camera_device.c | 9 +++++++++
+ 1 file changed, 9 insertions(+)
+
+diff --git a/userland/src/camera_device.c b/userland/src/camera_device.c
+index 24b1d6b..e6aaeb0 100644
+--- a/userland/src/camera_device.c
++++ b/userland/src/camera_device.c
+@@ -1324,6 +1324,15 @@ worker(void *context)
+ 		return NULL;
+ 	}
+ 	isp_init(&isp);
++	{
++		/*
++		 * This stream's camera asked for before the first read: else the first frames come from the kernel's last
++		 * camera, which is started for them (on the Mi 9T the front one pops up and down again for nothing)
++		 */
++		struct hakios_camera_command c = { .command = HAKIOS_CAMERA_SENSOR, .a = s->camera->sensor, .b = ~0u };
++
++		(void)write(device, &c, sizeof(c));
++	}
+ 	while (s->running && failures < 5) {
+ 		ssize_t n;
+ 

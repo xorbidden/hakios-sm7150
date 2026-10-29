@@ -1,0 +1,177 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: xorbidden <xorbidden@proton.me>
+Date: Thu, 29 Oct 2026 14:14:33 +0100
+Subject: [PATCH] inject: pass CoreBrightness's brightness to the panel
+
+backboardd sets the brightness on CoreBrightness's BrightnessSystem
+(DisplayBrightness and DisplayBrightnessFactor), which finds no
+display here; the slider moved and the panel stayed as it was. Hook
+-[BrightnessSystem setProperty:forKey:] and write the product of the
+two, perceptually squared, to kern.hakios.panel_brightness (0-2047)
+for a panel driver that offers it. Hook copyPropertyForKey: so Control
+Center's slider is enabled and reads back the level we keep.
+
+Without such a sysctl (redwood, QEMU) the write fails harmlessly.
+
+Tested on the Mi 9T (old port, 5d31514): the Control Center slider
+and auto-dim change the panel's brightness.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ userland/src/inject.c | 136 ++++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 136 insertions(+)
+
+diff --git a/userland/src/inject.c b/userland/src/inject.c
+index fb9f6b2..a9a5bb6 100644
+--- a/userland/src/inject.c
++++ b/userland/src/inject.c
+@@ -541,6 +541,141 @@ window_server_fixes(void)
+ 	    orig_finish_update && orig_renderer && orig_render_update ? "installed" : "INCOMPLETE");
+ }
+ 
++/* ---- backboardd: the brightness ------------------------------------------------------------------------ */
++
++/*
++ * The window server's brightness goes to CoreBrightness's BrightnessSystem as properties
++ * (-setProperty:forKey:, as backboardd's log says: "Set BrightnessSystem property:..."):
++ *   DisplayBrightness                 { Brightness: 0 to 1 (the slider), Commit: ... }
++ *   DisplayBrightnessFactor(WithFade)  0 while the screen is off, 1 while it is on
++ * CoreBrightness would take them to a display that is not here. They are passed on to it as
++ * they are, and their product to the kernel too (sysctl kern.hakios.panel_brightness, 0 to
++ * 2047), where the panel driver sends it to the panel (devices/davinci/drivers/gpu/hakios.dsi.c: the Mi 9T's panel, so
++ * far the only one). The slider's scale is perceptual: squared, roughly the panel's light.
++ */
++static uintptr_t (*orig_brightness_set)(id, SEL, id, id);
++static double brightness_slider = 0.5, brightness_factor = 1.0;
++
++static void
++brightness_to_panel(void)
++{
++	int level = (int)(brightness_slider * brightness_slider * brightness_factor * 2047.0 + 0.5);
++
++	if (brightness_factor > 0 && brightness_slider > 0 && level < 2) {
++		level = 2;                      /* (the lowest step the slider leaves still shows something) */
++	}
++	if (level > 2047) {
++		level = 2047;
++	}
++	sysctlbyname("kern.hakios.panel_brightness", NULL, NULL, &level, sizeof(level));
++}
++
++static uintptr_t
++my_brightness_set(id self, SEL selector, id value, id key)
++{
++	uintptr_t result = orig_brightness_set(self, selector, value, key);
++	CFTypeRef v = (CFTypeRef)value;
++	double number;
++
++	if (key != nil && v != NULL && CFGetTypeID((CFTypeRef)key) == CFStringGetTypeID()) {
++		CFStringRef k = (CFStringRef)key;
++
++		if (CFStringCompare(k, CFSTR("DisplayBrightness"), 0) == kCFCompareEqualTo && CFGetTypeID(v) == CFDictionaryGetTypeID()) {
++			CFNumberRef b = CFDictionaryGetValue((CFDictionaryRef)v, CFSTR("Brightness"));
++
++			if (b != NULL && CFGetTypeID(b) == CFNumberGetTypeID() && CFNumberGetValue(b, kCFNumberDoubleType, &number)) {
++				brightness_slider = number < 0 ? 0 : number > 1 ? 1 : number;
++				brightness_to_panel();
++			}
++		} else if ((CFStringCompare(k, CFSTR("DisplayBrightnessFactor"), 0) == kCFCompareEqualTo ||
++		    CFStringCompare(k, CFSTR("DisplayBrightnessFactorWithFade"), 0) == kCFCompareEqualTo) &&
++		    CFGetTypeID(v) == CFNumberGetTypeID() && CFNumberGetValue((CFNumberRef)v, kCFNumberDoubleType, &number)) {
++			brightness_factor = number < 0 ? 0 : number > 1 ? 1 : number;
++			brightness_to_panel();
++		}
++	}
++	return result;
++}
++
++/*
++ * ... and the other way: whether the brightness can be set at all (BackBoardServices'
++ * BKSDisplayBrightnessIsBrightnessLevelControlAvailable, which Control Center's slider asks before it
++ * lets itself be moved, answered from BrightnessSystem's CBBrightnessControlAvailable and
++ * BrightnessLevelControlAvailable) and what it is. CoreBrightness finds no display of its own here
++ * and says no: here it is yes, and the brightness the one we keep when it has none. The first keys
++ * asked for, with CoreBrightness's own answers, go to the log.
++ */
++static id (*orig_brightness_copy)(id, SEL, id);
++
++static id
++my_brightness_copy(id self, SEL selector, id key)
++{
++	static unsigned said;
++	id value = orig_brightness_copy(self, selector, key);
++	CFStringRef k = (CFStringRef)key;
++
++	if (key == nil || CFGetTypeID((CFTypeRef)key) != CFStringGetTypeID()) {
++		return value;
++	}
++	if (said < 40) {
++		char name[96] = "?", answer[160] = "nil";
++		CFStringRef description = value ? CFCopyDescription((CFTypeRef)value) : NULL;
++
++		CFStringGetCString(k, name, sizeof(name), kCFStringEncodingUTF8);
++		if (description != NULL) {
++			CFStringGetCString(description, answer, sizeof(answer), kCFStringEncodingUTF8);
++			CFRelease(description);
++		}
++		said++;
++		say("hakios: brightness: CoreBrightness is asked for %s: %s\n", name, answer);
++	}
++	if (CFStringCompare(k, CFSTR("CBBrightnessControlAvailable"), 0) == kCFCompareEqualTo ||
++	    CFStringCompare(k, CFSTR("BrightnessLevelControlAvailable"), 0) == kCFCompareEqualTo) {
++		if (value != nil) {
++			CFRelease((CFTypeRef)value);
++		}
++		return (id)CFRetain(kCFBooleanTrue);
++	}
++	if (value == nil && CFStringCompare(k, CFSTR("DisplayBrightness"), 0) == kCFCompareEqualTo) {
++		CFNumberRef number = CFNumberCreate(NULL, kCFNumberDoubleType, &brightness_slider);
++		const void *keys[1] = { CFSTR("Brightness") }, *values[1] = { number };
++		CFDictionaryRef d = CFDictionaryCreate(NULL, keys, values, 1, &kCFTypeDictionaryKeyCallBacks,
++		    &kCFTypeDictionaryValueCallBacks);
++
++		CFRelease(number);
++		return (id)d;
++	}
++	return value;
++}
++
++/* BrightnessSystem is CoreBrightness's, which backboardd may load after this library starts: looked for once a second. */
++static void
++brightness_hook(void *tries)
++{
++	Class cls = objc_getClass("BrightnessSystem");
++	Method method = cls ? class_getInstanceMethod(cls, sel_registerName("setProperty:forKey:")) : NULL;
++
++	if (method == NULL) {
++		if ((uintptr_t)tries < 30) {
++			dispatch_after_f(dispatch_time(DISPATCH_TIME_NOW, NSEC_PER_SEC), dispatch_get_global_queue(0, 0),
++			    (void *)((uintptr_t)tries + 1), brightness_hook);
++		} else {
++			say("hakios: brightness: no -[BrightnessSystem setProperty:forKey:] after 30 s: the panel keeps its own\n");
++		}
++		return;
++	}
++	orig_brightness_set = (uintptr_t (*)(id, SEL, id, id))method_getImplementation(method);
++	method_setImplementation(method, (IMP)my_brightness_set);
++	method = class_getInstanceMethod(cls, sel_registerName("copyPropertyForKey:"));
++	if (method != NULL) {
++		orig_brightness_copy = (id (*)(id, SEL, id))method_getImplementation(method);
++		method_setImplementation(method, (IMP)my_brightness_copy);
++	} else {
++		say("hakios: brightness: no -[BrightnessSystem copyPropertyForKey:]: the slider stays as CoreBrightness has it\n");
++	}
++	say("hakios: brightness: CoreBrightness's settings go to the panel too (kern.hakios.panel_brightness)\n");
++}
++
+ /* ---- backboardd: no ambient light sensor ------------------------------------------------------------ */
+ 
+ /*
+@@ -1126,6 +1261,7 @@ hakios_init(void)
+ 		}
+ 		opengl_es();
+ 		window_server_fixes();
++		brightness_hook(NULL);
+ 		/*
+ 		 * brightness_fixes() is not used for now: with it backboardd no longer took our touch
+ 		 * screen service for its own ("still waiting for a main screen digitizer"), whether the

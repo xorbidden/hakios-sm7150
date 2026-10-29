@@ -46,8 +46,10 @@ The rule for where a piece goes:
 | Wi-Fi's shared runtime: whole driver messages, station fixes for drivers without offload | patch 0017 (wifi/lx) |
 | Wi-Fi: the stack split from the WCN6750 bring-up; a device names its Linux driver object | patch 0018, `lx.object` |
 | Wi-Fi: the WCN3990 under ath10k (`wifi_ath10k=1 wifi_smmu=2 wifi_station=1`) | `soc/drivers/wifi/` (`WIFI_SM7150`: hakios.wifi_sm7150.c, hakios.wlfw10.c, `replaces WIFI`), `soc/wifi/` (ath10k's platform lx_snoc.c, include10/, mk-ath10k.sh), patch 0019 (fw/network for any radio) -- seen on the phone 2026-10-29 |
-| Flashlight: the PM6150L's flash module (`pmic_flash=0x5d3`) | patch 0020 (common torch driver: a layout per PMIC) (not yet built) |
-| Cameras: the Mi 9T's IMX582 and pop-up S5K3T2 | `drivers/camera/hakios.cam_davinci.c` (ported; not yet in a conf, not built) |
+| Flashlight: the PM6150L's flash module (`pmic_flash=0x5d3`, `torch=3`) | patch 0020 (common torch driver: a layout per PMIC) (built; not yet run) |
+| Cameras: the Mi 9T's IMX582 and pop-up S5K3T2 (`cam=5`) | `drivers/camera/hakios.cam_davinci.c`, `replaces CAMERA`; patch 0021 (the stream's camera chosen before its first read) (built; not yet run) |
+| Brightness: iOS's slider to the panel (kern.hakios.panel_brightness) | patch 0022 (inject.c) (built; not yet run) |
+| Bluetooth: the WCN3990 brought up (`bt=5`), not yet used by iOS | `soc/drivers/bluetooth/hakios.bt_wcn3990.c`, `replaces BT` (built; not yet run) |
 | CPU clocks through the OSM (`cpufreq=1`) | `soc/drivers/power/hakios.cpufreq_osm.c`, `replaces CPUFREQ` -- seen on the phone 2026-10-29 |
 
 The SoC's audio drivers are copies of the common ones with the SM7150's changes woven through (memory map, APCS
@@ -66,7 +68,5 @@ own UFS driver's first steps (ufs_alone, ufs_hc_area: never usable). They stay i
 
 | # | Part | Old files | Goes to | Notes |
 |---|---|---|---|---|
-| 11 | Cameras, flashlight | hk_cam_davinci.c, hk_camera.c, hk_torch.c changes | `drivers/camera/`: `CAM_DAVINCI` `replaces CAMERA`, the PM6150L torch | userland camera_device.c changes too |
-| 12 | Bluetooth | hk_bt.c (WCN3990, bt=5) | `soc/drivers/bluetooth/hakios.bt_wcn3990.c` `replaces BT` | then on with the to-do list: Bluetooth in iOS |
 | 13 | Userland bits | mkjobs.py, net_test.m, inject*.c (brightness), camera_device.c (the firmware staging is done: userland.sh) | patches, or the device's own image fragment if upstream has one | |
 | 14 | Docs | docs/DAVINCI.md | `docs/` here, and the device's page through device.conf | |

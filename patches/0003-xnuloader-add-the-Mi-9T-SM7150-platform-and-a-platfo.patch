@@ -1,27 +1,27 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: xorbidden <xorbidden@proton.me>
 Date: Thu, 29 Oct 2026 12:17:31 +0100
-Subject: [PATCH] xnuloader: the Mi 9T (davinci, SM7150) as a platform, and a
- table the platform is picked from
+Subject: [PATCH] xnuloader: add the Mi 9T (SM7150) platform and a platform
+ table
 
-The loader knew redwood by its framebuffer and took everything else for QEMU. Now each phone is a
-`struct platform` in a table, picked by the framebuffer base its UEFI reports (redwood 0xE1000000,
-davinci 0x9C000000), or by the payload's `platform` entry (mkpayload.py --platform; xl gives $DEVICE)
-when the display did not come up, which on davinci happens some of the time.
+The loader recognised redwood by its framebuffer and treated anything
+else as QEMU. Keep platforms in a table, picked by the framebuffer
+base the UEFI reports, or by the payload's `platform` entry
+(mkpayload.py --platform; xl passes $DEVICE) when the display did not
+come up.
 
-Three new fields a platform may set, none of which changes redwood:
-  no_flash_log   the loader's log never goes into the flash (davinci: over USB only)
-  vtimer_intid   the virtual timer's PPI in /arm-io/gic "vtimer-intid" (SM7150, as SDM845 and SM8150: 19,
-                 not 27); the kernel side reads it
-  fb_base        what picks it
+New struct platform fields, unused by redwood:
+- no_flash_log: never write the loader's log to flash;
+- vtimer_intid: the virtual timer's PPI, put in /arm-io/gic
+  "vtimer-intid" (19 on SM7150, not 27);
+- fb_base: what selects the platform.
 
-Also: when there is no block device yet the storage's drivers are connected, as a boot manager's
-"connect all" does (on davinci's UEFI nothing had connected UFSDxe; with this the loader's block
-service works there), and on davinci the UEFI's own log buffer is said when even that finds none;
-davinci's UEFI has the charger drivers too, so battery= is served there.
+Also connect the storage drivers when no block device exists yet (the
+Mi 9T's UEFI leaves UFSDxe unconnected), and serve battery= on davinci,
+whose UEFI has the same charger drivers.
 
-Seen on the Mi 9T with hackios-xnu-kernel-davinci (6d40948): "platform davinci", the battery's level and
-charging, storage read through the loader, the kernel's timer ticking on PPI 19.
+Tested on the Mi 9T: "platform davinci", storage through the loader,
+battery level and charger state.
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 ---

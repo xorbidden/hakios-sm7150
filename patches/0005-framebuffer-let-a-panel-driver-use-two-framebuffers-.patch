@@ -1,21 +1,25 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: xorbidden <xorbidden@proton.me>
 Date: Thu, 29 Oct 2026 12:27:37 +0100
-Subject: [PATCH] MiniIOMobileFramebuffer: a panel a device's driver drives can
- take two framebuffers, and frames never tear
+Subject: [PATCH] framebuffer: let a panel driver use two framebuffers; fix
+ tearing
 
-A device whose own driver sends the panel its frames (the Mi 9T: DSI command mode, devices/davinci) registers
-a `struct hakios_panel` (hakios_panel_register): start (called by GenericARMPE before the framebuffer starts),
-a second framebuffer if it can have one, the boot framebuffer's address, and show. Every frame is then drawn
-into the framebuffer not shown and shown when it is whole (fb_flip=0: one, as before). Without a registered
-panel nothing changes: redwood's UEFI framebuffer is drawn into as it was.
+A device whose own driver feeds the panel (the Mi 9T's command-mode
+DSI panel) registers a struct hakios_panel with start, second_buffer,
+first_buffer and show. Frames are then drawn into the buffer not on
+screen and shown when complete (fb_flip=0 keeps one buffer).
+GenericARMPE starts the panel just before the framebuffer. Without a
+registered panel nothing changes.
 
-Two more causes of tearing gone, for every device: a swap's surfaces count as in use (IOSurfaceIsInUse,
-MiniIOSurfaceDisplayUse) until they have been copied, and SwapEnd / SwapWait come back only then, not when
-the copy starts; CoreAnimation drew into one surface in five while it was still being copied (69 of 600
-layers, measured on the Mi 9T, 2026-10-23).
+Two more tearing causes, fixed for every device: a swap's surfaces stay
+"in use" (MiniIOSurfaceDisplayUse) until copied, and SwapEnd/SwapWait
+return only after the copy. CoreAnimation had drawn into one surface
+in five while it was being copied.
 
-Seen on the Mi 9T (hackios-xnu-kernel-davinci 562d911, 1337d5f): no tearing, SpringBoard at 60 Hz.
+The new fb_flip argument is added to the boot-argument catalogue and
+common_defconfig.
+
+Tested on the Mi 9T: no tearing, SpringBoard at 60 Hz.
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 ---

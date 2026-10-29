@@ -1,15 +1,18 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: xorbidden <xorbidden@proton.me>
 Date: Thu, 29 Oct 2026 12:28:02 +0100
-Subject: [PATCH] loader_return.c: a SoC's or device's own drivers register
- what they need done on the way back
+Subject: [PATCH] loader_return: let SoC and device drivers register return
+ hooks
 
-loader_return() calls each common driver's quiesce and stop by name. A driver that lives in a device's
-repository cannot be named there, and must still be stopped: the Mi 9T's panel has to be fed from the
-first framebuffer again (the loader's, and the next kernel's), its second modem copy shut down, its
-vibrator off. hakios_return_register(quiesce, stop), called when such a driver starts, puts them on a
-short list (8) that runs after the common ones, in every return (quiesce, a panic's too) and in one that
-is not a panic or that the host asked for (stop). With nothing registered, nothing changes.
+loader_return() calls each common driver's quiesce and stop by name,
+which a driver living in a device repository cannot be. Add
+hakios_return_register(quiesce, stop): up to eight drivers register
+when they start; their quiesce runs on every return (panics too) and
+their stop on an orderly one, after the common drivers'. Nothing
+changes when nothing is registered.
+
+Tested on the Mi 9T: the panel, the modem copy and the vibrator are
+stopped through it at the end of each run.
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 ---

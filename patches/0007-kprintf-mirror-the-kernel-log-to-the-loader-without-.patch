@@ -1,17 +1,16 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: xorbidden <xorbidden@proton.me>
 Date: Thu, 29 Oct 2026 12:29:05 +0100
-Subject: [PATCH] the kernel's log mirrored to the loader from kprintf's start,
- on a phone with no serial port
+Subject: [PATCH] kprintf: mirror the kernel log to the loader without a UART
 
-Without a UART kprintf goes to the screen only, and nothing of the kernel's log reaches the loader's while
-the kernel runs: the copy of the message buffer is made at the return, so a loader watching from another
-core (bootcpu=7) that takes back a hung kernel found its log empty. Once kprintf has fallen back to the
-console, whatever is already in the message buffer is put into the loader's log, and from then on every
-character log_putc_locked() puts there; the copy at the return is then not made again. With a serial port
-(QEMU) nothing changes.
+Without a serial port kprintf only reaches the screen, and the loader
+copies the message buffer only at the return. A loader watching from
+another core (bootcpu=7) that takes back a hung kernel therefore got an
+empty log. Once kprintf falls back to the console, copy what the
+message buffer already holds into the loader's log and mirror every
+later character; skip the copy at the return. Unchanged with a UART.
 
-Seen on the Mi 9T (hackios-xnu-kernel-davinci): hung runs on core 7 came back with their whole log.
+Tested on the Mi 9T: hung runs on core 7 return with their full log.
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 ---

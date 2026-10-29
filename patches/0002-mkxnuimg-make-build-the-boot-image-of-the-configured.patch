@@ -1,15 +1,20 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: xorbidden <xorbidden@proton.me>
 Date: Thu, 29 Oct 2026 12:14:25 +0100
-Subject: [PATCH] mkxnuimg.py, make: the boot image of the device configured,
- not always redwood's
+Subject: [PATCH] mkxnuimg, make: build the boot image of the configured device
 
-DEVICE (the .config's CONFIG_DEVICE after `make <name>_defconfig`, else redwood, as before) now picks the
-UEFI that mkxnuimg.py packs: its Mu-Silicium build (Build/<device>Pkg, Resources/DTBs/<device>.dtb) or
-devices/<device>/prebuilt/, and the UEFI image's base and size from the port's Resources/Configs/<device>.toml
-([uefi_fd]) instead of redwood's 0x9FD00000/0x200000 (the Mi 9T's is 0x9FC00000/0x300000). make exports it,
-so ./xl and tools/modem-cycle.sh see it too; the run scripts take that device's soc.args rather than the
-first devices/*/soc.args there is (with two devices checked out, the other one's could be taken).
+mkxnuimg.py always packed redwood's UEFI at redwood's FD base and size.
+Pick the device from $DEVICE, else the .config's CONFIG_DEVICE, else
+redwood, and take:
+- the UEFI from its Mu-Silicium build (Build/<device>Pkg) or
+  devices/<device>/prebuilt/;
+- the FD base and size from its Resources/Configs/<device>.toml
+  ([uefi_fd]); the Mi 9T's is 0x9FC00000/0x300000.
+make exports DEVICE for xl and the run scripts, and modem-cycle.sh
+takes that device's soc.args instead of the first one found.
+
+Tested: the Mi 9T boots from the image this builds; redwood's values
+are unchanged when no other device is configured.
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 ---

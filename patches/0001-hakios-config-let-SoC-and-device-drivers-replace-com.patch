@@ -1,14 +1,27 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: xorbidden <xorbidden@proton.me>
 Date: Thu, 29 Oct 2026 12:09:40 +0100
-Subject: [PATCH] hakios-config: a SoC's or device's driver may replace a
- common one (`replaces NAME`)
+Subject: [PATCH] hakios-config: let SoC and device drivers replace common ones
 
-A port whose SoC needs a different driver for a part the common repository already has (another audio DSP's
-memory map, another Adreno generation) keeps that driver in its own repository and says `replaces ADSP`: the
-common one is then left out, the replacement counts as it for `requires`, and hakios.drivers.h defines
-HAKIOS_ADSP so that drivers/core/hakios.stubs.c gives no stand-ins for what the replacement defines. Building
-both is refused, naming both. Only a SoC's or device's conf may say it.
+A port whose SoC needs a different driver for a part the common
+repository already covers (another audio DSP memory map, another
+Adreno) keeps that driver in its own repository. Make that work:
+
+- `replaces NAME` in a SoC's or device's conf: the replacement is
+  built instead of the common driver, never beside it, counts as it for
+  `requires` and for boot-argument checks, and hakios.drivers.h defines
+  HAKIOS_<NAME> so drivers/core/hakios.stubs.c gives no stand-ins.
+- A SoC's or device's driver defaults to off, so another device's
+  defconfig never picks it up.
+- The boot arguments those drivers read are known to the config
+  checks, without entering the common catalogue.
+- `listing` and `complete` cover common symbols only; the config tests
+  assume only common drivers are always built.
+
+Tested: hakios-config-test, hakios-device-test and boot-args checks
+pass with the davinci device repository checked out; replacement
+drivers (CPUFREQ_OSM, GT9886, ADSP_SM7150, ...) build and run on the
+Mi 9T.
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 ---

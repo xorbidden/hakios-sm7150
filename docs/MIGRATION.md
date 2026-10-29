@@ -33,6 +33,9 @@ The rule for where a piece goes:
 | Kernel builds on Ubuntu (mawk, python3 only) | patches 0008, 0009 |
 | RPMh helpers for the SoC's drivers (LDOs, bus votes) on upstream's hakios_rsc_lock | `soc/drivers/core/hakios.rpmh.c` (built) |
 | The panel (DSI command mode) with two framebuffers, via the panel interface and return hooks | `drivers/gpu/hakios.dsi.c` (built; not yet run) |
+| Touch: GT9886 in place of the common Goodix driver (`touchscreen=1`) | `drivers/input/hakios.gt9886.c`, `replaces GOODIX` (built) |
+| Buttons: the PM6150's power-on block and PM6150L GPIO 2 | patch 0010 (common buttons driver: gen2 PON, `pmic_pon=`, `pmic_volume_up=`) (built) |
+| Storage through the loader's block service | the common UFS driver, unchanged (`CONFIG_HAKIOS_UFS=y`, `ufs=2`) (built) |
 | CPU clocks through the OSM (`cpufreq=1`) | `soc/drivers/power/hakios.cpufreq_osm.c`, `replaces CPUFREQ` (built; not yet run) |
 
 Left out on purpose: the old bring-up diagnostics (XNU_DIAG_* in the loader and UEFI, gic_v3_timer_report), the
@@ -43,8 +46,6 @@ own UFS driver's first steps (ufs_alone, ufs_hc_area: never usable). They stay i
 
 | # | Part | Old files | Goes to | Notes |
 |---|---|---|---|---|
-| 5 | Touch, buttons | hk_gt9886.c; hk_buttons.c (board_pon, board_volume_up) | `drivers/input/hakios.gt9886.c`; buttons: a patch for the PMIC addresses as arguments | |
-| 6 | Storage through the loader | (works with patch 0003) | `CONFIG_HAKIOS_UFS=y` | check that the reads still go |
 | 7 | GPU | hk_a618.c, hk_adreno.c changes | `soc/drivers/gpu/hakios.a618.c` `replaces ADRENO` | Mesa's freedreno for the A618: userland GL=1 |
 | 8 | Audio DSP, sound, microphone, battery | hk_adsp.c (board_smem, board_adsp_mem, ...), hk_adsp_modem.c, hk_sound.c, hk_tfa.c, hk_mic.c, hk_battery.c | `soc/drivers/audio/hakios.adsp_sm7150.c` `replaces ADSP` (+ its modem copy); `drivers/audio/hakios.tfa9874.c` `replaces SPEAKER`; mic, sound: replace or patch, after a diff | the biggest part; the board_* addresses become soc_* |
 | 9 | Wi-Fi | hk_wlfw10.c, hk_wifi.c, hk_lx.c, hk_apple80211.c, hk_net.c changes, wifi/lx (include10, lx_snoc.c), tools/mk-ath10k.sh | `soc/drivers/wifi/` (`WIFI_ATH10K` `replaces WIFI`), its Linux glue under `soc/wifi/` | |

@@ -1,0 +1,7 @@
+# devices/davinci/drivers/input/conf: the Mi 9T's input (docs/drivers-config.md).
+
+driver GT9886
+	file    bsd/dev/hakios.gt9886.c
+	replaces GOODIX
+	requires RPMH
+	help    the Mi 9T's touch screen: a Goodix GT9886 on I2C (touchscreen=1), in place of the common Goodix driver

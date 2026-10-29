@@ -1,0 +1,269 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: xorbidden <xorbidden@proton.me>
+Date: Thu, 29 Oct 2026 12:45:43 +0100
+Subject: [PATCH] buttons: support PM6150-class power-on blocks and other PMIC
+ layouts
+
+The driver only knew the PMK8350's power-on block (subtype 9, "gen3")
+at peripheral 0x013 and volume up on GPIO6 of the PM7325. On older
+PMICs such as the PM6150 (SM7150, the Mi 9T) the power-on block has
+subtype 1 to 5 and reports KPDPWR and RESIN in bits 0 and 1 instead of
+7 and 6 (Linux pm8941-pwrkey.c, qpnp-power-on.c).
+
+- Accept subtypes 1-5 and 9 and pick the key bits from the subtype.
+- Take the peripherals from boot-args pmic_pon= and pmic_volume_up=
+  (slave << 8 | peripheral); the defaults stay redwood's.
+
+Tested on the Mi 9T with the old port (pmic_pon=0x008,
+pmic_volume_up=0x4c1): power and both volume keys work. Redwood's
+behaviour is unchanged when the arguments are absent.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ configs/boot-args.lst          |  2 ++
+ configs/common_defconfig       | 10 ++++--
+ configs/symbols.tsv            |  2 ++
+ docs/boot-args.md              |  6 ++--
+ drivers/input/hakios.buttons.c | 65 ++++++++++++++++++++++++++--------
+ 5 files changed, 66 insertions(+), 19 deletions(-)
+
+diff --git a/configs/boot-args.lst b/configs/boot-args.lst
+index 7e6d3eb..c2f971f 100644
+--- a/configs/boot-args.lst
++++ b/configs/boot-args.lst
+@@ -199,6 +199,8 @@ net_names	k
+ net_trace	k
+ pmic	k
+ pmic_list	k
++pmic_pon	k
++pmic_volume_up	k
+ privs	k
+ rd	kl
+ rec_mb	k
+diff --git a/configs/common_defconfig b/configs/common_defconfig
+index 379e4a7..17d9bdd 100644
+--- a/configs/common_defconfig
++++ b/configs/common_defconfig
+@@ -2,7 +2,7 @@
+ # HakiOS common defconfig: every setting there is, with what it does.
+ # Made by tools/hakios-config.py listing common -o <this file>; the values are the ones that file sets, and tests/CI check that it names every symbol.
+ #
+-# 342 symbols in 18 groups; 34 are set, 25 of them drivers built in.
++# 344 symbols in 18 groups; 34 are set, 25 of them drivers built in.
+ #
+ 
+ #
+@@ -301,7 +301,7 @@ CONFIG_UFS=2
+ # CONFIG_VIRTIO_BLK is not set
+ 
+ #
+-# Touch and buttons (8)
++# Touch and buttons (10)
+ #
+ 
+ # the touch screen, and the power and volume buttons
+@@ -313,6 +313,12 @@ CONFIG_TOUCHSCREEN=y
+ # read by hakios.buttons.c (kernel)
+ # CONFIG_BUTTONS_STEPS is not set
+ 
++# the power-on block: slave S, peripheral PP (default 0x013, the PMK8350's)
++# CONFIG_PMIC_PON is not set
++
++# read by hakios.buttons.c (kernel)
++# CONFIG_PMIC_VOLUME_UP is not set
++
+ # read by hakios.goodix.c (kernel)
+ # CONFIG_TOUCH_FLIP is not set
+ 
+diff --git a/configs/symbols.tsv b/configs/symbols.tsv
+index f76afd9..c65d6c3 100644
+--- a/configs/symbols.tsv
++++ b/configs/symbols.tsv
+@@ -178,6 +178,8 @@ MODEM_STEP	arg	modem_step	Cellular	k	hakios.mpss.c	the steps once the root is th
+ MODEM_WAIT	arg	modem_wait	Cellular	k	hakios.mpss.c	
+ MODEM_WDA_OFF	arg	modem_wda_off	Cellular	k	hakios.mpss.c	
+ PMIC_LIST	arg	pmic_list	Chip, thermal and PMIC	k	hakios.pmic.c	only the clock, not the inventory of every block
++PMIC_PON	arg	pmic_pon	Touch and buttons	k	hakios.buttons.c	the power-on block: slave S, peripheral PP (default 0x013, the PMK8350's)
++PMIC_VOLUME_UP	arg	pmic_volume_up	Touch and buttons	k	hakios.buttons.c	
+ PRIVS	arg	privs	Security stand-ins	k	kern_minimac.c	
+ RD	arg	rd	CPU, memory and boot	kl	(patch),loader.c	
+ REC_MB	arg	rec_mb	GPU and display	k	MiniIOMobileFramebuffer.cpp	
+diff --git a/docs/boot-args.md b/docs/boot-args.md
+index 15b8889..aac490a 100644
+--- a/docs/boot-args.md
++++ b/docs/boot-args.md
+@@ -2,7 +2,7 @@
+ 
+ Made by `tools/boot-args.py --markdown`; CI fails if it is out of date with the source (`tools/boot-args.py --check`).
+ 
+-Every argument that the kernel, the loader or user space of this port reads, and which file reads it. **320 arguments**: 271 read by the kernel, 14 by the loader, 45 by user space (one is read in more than one place).
++Every argument that the kernel, the loader or user space of this port reads, and which file reads it. **322 arguments**: 273 read by the kernel, 14 by the loader, 45 by user space (one is read in more than one place).
+ 
+ This is a catalogue of what exists and who reads it, not a manual. What an argument means is in the head of the file that reads it. The stable switches have a symbol in the configuration (`tools/hakios-config.py help SYMBOL`, `docs/configs.md`); the rest are the knobs of bring-up (a driver's steps, pauses, traces, test modes) and can change with the driver. Any of them can be given in a configuration with `CONFIG_BOOTARGS="name=value ..."`, which checks that each name is in this list.
+ 
+@@ -238,12 +238,14 @@ Layers: **K** the kernel, **L** the loader, **U** user space (through `sysctl ke
+ | `cam_shutter` | K | `hakios.camera.c` | `CONFIG_CAM_SHUTTER` |  |
+ | `cam_vblank` | K | `hakios.camera.c` | `CONFIG_CAM_VBLANK` |  |
+ 
+-## Touch and buttons (8)
++## Touch and buttons (10)
+ 
+ | Argument | Layer | Read by | Configuration | Set by |
+ |---|---|---|---|---|
+ | `buttons` | K | `hakios.buttons.c` | `CONFIG_BUTTONS` |  |
+ | `buttons_steps` | K | `hakios.buttons.c` | `CONFIG_BUTTONS_STEPS` |  |
++| `pmic_pon` | K | `hakios.buttons.c` | `CONFIG_PMIC_PON` |  |
++| `pmic_volume_up` | K | `hakios.buttons.c` | `CONFIG_PMIC_VOLUME_UP` |  |
+ | `touch_flip` | K | `hakios.goodix.c` | `CONFIG_TOUCH_FLIP` |  |
+ | `touch_poll_us` | K | `hakios.goodix.c` | `CONFIG_TOUCH_POLL_US` |  |
+ | `touch_rate` | K | `hakios.goodix.c` | `CONFIG_TOUCH_RATE` |  |
+diff --git a/drivers/input/hakios.buttons.c b/drivers/input/hakios.buttons.c
+index 3c9b01a..f591399 100644
+--- a/drivers/input/hakios.buttons.c
++++ b/drivers/input/hakios.buttons.c
+@@ -1,7 +1,12 @@
+ /*
+  * The buttons of the POCO X5 Pro (redwood) -- power, volume up, volume down -- as a source of
+  * button records for /dev/hakios-touch (sys/hakios.input.h). Only with boot-arg buttons=1:
+- * every address below belongs to this phone.
++ * every address below belongs to this phone, unless the kernel's command line names other peripherals:
++ *   pmic_pon=0xSPP         the power-on block: slave S, peripheral PP (default 0x013, the PMK8350's)
++ *   pmic_volume_up=0xSPP   the GPIO that is volume up (default 0x18d, GPIO6 of the PM7325)
++ * A PM6150-generation power-on block (subtype 1 to 5, as on the SM7150's Mi 9T: 0x008, volume up 0x4c1) has
++ * the keys in bits 0 and 1 of its status, not 7 and 6 (Linux drivers/input/misc/pm8941-pwrkey.c, Qualcomm's
++ * qpnp-power-on.c): which kind it is is taken from the subtype it reports.
+  *
+  * None of the three is a pin of the SoC. They are inputs of two of the power management chips:
+  *   power        KPDPWR_N of the power-on block ("PON") of the PMK8350
+@@ -130,9 +135,11 @@ struct peripheral {
+ 	uint16_t        id;             /* slave << 8 | peripheral: the high byte of its register addresses */
+ 	uint16_t        channel;
+ 	bool            found;
++	uint8_t         subtype;        /* as it says (identify) */
+ };
+-static struct peripheral pon = { .name = "the PMK8350's power-on block", .id = 0x013 };          /* registers 0x1300 of slave 0 */
+-static struct peripheral pin = { .name = "GPIO6 of the PM7325", .id = 0x18d };                   /* registers 0x8d00 of slave 1 */
++static struct peripheral pon = { .name = "the power-on block", .id = 0x013 };    /* default: the PMK8350's, 0x1300 of slave 0 */
++static struct peripheral pin = { .name = "the volume-up pin", .id = 0x18d };     /* default: GPIO6 of the PM7325, 0x8d00 of slave 1 */
++static uint8_t pon_kpdpwr, pon_resin;   /* the keys' bits in the power-on block's status (by its subtype) */
+ 
+ /* How the reads have gone: said once a minute. */
+ static struct {
+@@ -229,9 +236,13 @@ find_channel(struct peripheral *p, uint32_t channels)
+ 
+ /* the power-on block, of the kind that is split in two ("generation 3"): this is its half for the operating system */
+ #define PON_TYPE                0x01
+-#define PON_SUBTYPE_HLOS        0x09
+-#define PON_KPDPWR              0x80            /* in the status and in the interrupt registers */
++#define PON_SUBTYPE_PRIMARY     0x01            /* 1 to 5: the PM8941's kind up to "gen2" (the PM6150's) */
++#define PON_SUBTYPE_GEN2_LAST   0x05
++#define PON_SUBTYPE_HLOS        0x09            /* "gen3", the PMK8350's */
++#define PON_KPDPWR              0x80            /* in the status and in the interrupt registers ("gen3") */
+ #define PON_RESIN               0x40
++#define PON_KPDPWR_GEN2         0x01            /* ... and in the older kind */
++#define PON_RESIN_GEN2          0x02
+ 
+ /* a GPIO of the low or medium voltage kind */
+ #define GPIO_TYPE               0x10
+@@ -318,8 +329,8 @@ buttons_poll(void)
+ 	if (power.usable || volume_down.usable) {
+ 		problem = spmi_read(&pon, REG_RT_STATUS, &status, 1);
+ 		if (problem == NULL) {
+-			button_look(&power, status & PON_KPDPWR);
+-			button_look(&volume_down, status & PON_RESIN);
++			button_look(&power, status & pon_kpdpwr);
++			button_look(&volume_down, status & pon_resin);
+ 		} else if (said < 8) {
+ 			said++;
+ 			printf("buttons: reading %s: %s\n", pon.name, problem);
+@@ -338,7 +349,7 @@ buttons_poll(void)
+ 
+ /* Step 3: is each peripheral what the registers above are those of? */
+ static bool
+-identify(const struct peripheral *p, uint8_t type, uint8_t subtype_from, uint8_t subtype_to)
++identify(struct peripheral *p, uint8_t type, uint8_t subtype_from, uint8_t subtype_to)
+ {
+ 	const char *problem;
+ 	uint8_t is[2];
+@@ -358,6 +369,7 @@ identify(const struct peripheral *p, uint8_t type, uint8_t subtype_from, uint8_t
+ 		    subtype_from, subtype_to);
+ 		return false;
+ 	}
++	p->subtype = is[1];
+ 	return true;
+ }
+ 
+@@ -368,7 +380,8 @@ pon_inputs(void)
+ 	const char *problem;
+ 	uint8_t r[8], more[2];
+ 
+-	printf("buttons: next: read the status and the interrupt setup of %s (registers 0x1310 to 0x1319)\n", pon.name);
++	printf("buttons: next: read the status and the interrupt setup of %s (registers 0x%02x10 to 0x%02x19)\n", pon.name,
++	    pon.id & 0xff, pon.id & 0xff);
+ 	problem = spmi_read(&pon, REG_RT_STATUS, r, 8);
+ 	if (problem == NULL) {
+ 		problem = spmi_read(&pon, REG_INT_LATCHED, more, 2);
+@@ -378,12 +391,12 @@ pon_inputs(void)
+ 		return;
+ 	}
+ 	printf("buttons: power-on block: status %#x (power %s, volume down %s); interrupts: edge %#x, high %#x, low %#x, "
+-	    "enabled %#x, latched %#x, pending %#x\n", r[0], (r[0] & PON_KPDPWR) ? "HELD" : "released",
+-	    (r[0] & PON_RESIN) ? "HELD" : "released", r[REG_INT_SET_TYPE - REG_RT_STATUS], r[REG_INT_POLARITY_HIGH - REG_RT_STATUS],
++	    "enabled %#x, latched %#x, pending %#x\n", r[0], (r[0] & pon_kpdpwr) ? "HELD" : "released",
++	    (r[0] & pon_resin) ? "HELD" : "released", r[REG_INT_SET_TYPE - REG_RT_STATUS], r[REG_INT_POLARITY_HIGH - REG_RT_STATUS],
+ 	    r[REG_INT_POLARITY_LOW - REG_RT_STATUS], r[REG_INT_ENABLED - REG_RT_STATUS], more[0], more[1]);
+ 	power.usable = volume_down.usable = true;
+-	power.last = r[0] & PON_KPDPWR;
+-	volume_down.last = r[0] & PON_RESIN;
++	power.last = r[0] & pon_kpdpwr;
++	volume_down.last = r[0] & pon_resin;
+ }
+ 
+ /* Step 4 for the pin: it is volume up only if it is an input with a pull-up, and switched on. */
+@@ -394,7 +407,8 @@ pin_input(void)
+ 	uint8_t c[8], status = 0;
+ 	unsigned mode, pull;
+ 
+-	printf("buttons: next: read the setup and the level of %s (registers 0x8d40 to 0x8d47, 0x8d10)\n", pin.name);
++	printf("buttons: next: read the setup and the level of %s (registers 0x%02x40 to 0x%02x47, 0x%02x10)\n", pin.name,
++	    pin.id & 0xff, pin.id & 0xff, pin.id & 0xff);
+ 	problem = spmi_read(&pin, GPIO_REG_MODE, c, 8);
+ 	if (problem == NULL) {
+ 		problem = spmi_read(&pin, REG_RT_STATUS, &status, 1);
+@@ -455,6 +469,17 @@ buttons_thread(void *parameter, __unused wait_result_t result)
+ 	}
+ 
+ 	printf("buttons: step 2: look through the arbiter's table for the channels of the two peripherals\n");
++	{
++		uint32_t id;
++
++		if (PE_parse_boot_argn("pmic_pon", &id, sizeof(id)) && id != 0 && id <= 0xfff) {
++			pon.id = (uint16_t)id;
++		}
++		if (PE_parse_boot_argn("pmic_volume_up", &id, sizeof(id)) && id != 0 && id <= 0xfff) {
++			pin.id = (uint16_t)id;
++		}
++	}
++	printf("buttons: the power-on block is peripheral %#x, volume up %#x (slave << 8 | peripheral)\n", pon.id, pin.id);
+ 	find_channel(&pon, channels);
+ 	find_channel(&pin, channels);
+ 	if (steps < 3) {
+@@ -462,7 +487,17 @@ buttons_thread(void *parameter, __unused wait_result_t result)
+ 	}
+ 
+ 	printf("buttons: step 3: the first transfers on the SPMI bus\n");
+-	pon_known = identify(&pon, PON_TYPE, PON_SUBTYPE_HLOS, PON_SUBTYPE_HLOS);
++	pon_known = identify(&pon, PON_TYPE, PON_SUBTYPE_PRIMARY, PON_SUBTYPE_HLOS);
++	if (pon_known && pon.subtype <= PON_SUBTYPE_GEN2_LAST) {
++		pon_kpdpwr = PON_KPDPWR_GEN2;
++		pon_resin = PON_RESIN_GEN2;
++	} else if (pon_known && pon.subtype == PON_SUBTYPE_HLOS) {
++		pon_kpdpwr = PON_KPDPWR;
++		pon_resin = PON_RESIN;
++	} else if (pon_known) {
++		printf("buttons: ... a power-on block of a kind (%#x) whose keys this driver does not know: left alone\n", pon.subtype);
++		pon_known = false;
++	}
+ 	pin_known = identify(&pin, GPIO_TYPE, GPIO_SUBTYPE_LV, GPIO_SUBTYPE_MV_VIN3);
+ 	if (steps < 4) {
+ 		goto out;

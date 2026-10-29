@@ -1,0 +1,4 @@
+# HakiOS defconfig for the Xiaomi Mi 9T / Redmi K20 (davinci): the common kernel, the sm7150 family's facts, and this device's own.
+#include common_defconfig
+#include sm7150.config
+#include davinci.config

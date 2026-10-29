@@ -1,0 +1,7 @@
+# devices/davinci/drivers/haptic/conf: the Mi 9T's vibration motor (docs/drivers-config.md).
+
+driver VIBRATOR
+	file    bsd/dev/hakios.vibrator.c
+	replaces HAPTIC
+	help    the Mi 9T's vibration motor: an eccentric-mass motor on the PM6150's vibrator LDO, on while iOS's haptics
+	help    play (haptic=3; 1 a look, 2 one buzz), in place of the common Awinic driver

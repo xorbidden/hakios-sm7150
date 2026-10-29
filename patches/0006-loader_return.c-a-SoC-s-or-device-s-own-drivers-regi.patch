@@ -1,0 +1,96 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: xorbidden <xorbidden@proton.me>
+Date: Thu, 29 Oct 2026 12:28:02 +0100
+Subject: [PATCH] loader_return.c: a SoC's or device's own drivers register
+ what they need done on the way back
+
+loader_return() calls each common driver's quiesce and stop by name. A driver that lives in a device's
+repository cannot be named there, and must still be stopped: the Mi 9T's panel has to be fed from the
+first framebuffer again (the loader's, and the next kernel's), its second modem copy shut down, its
+vibrator off. hakios_return_register(quiesce, stop), called when such a driver starts, puts them on a
+short list (8) that runs after the common ones, in every return (quiesce, a panic's too) and in one that
+is not a panic or that the host asked for (stop). With nothing registered, nothing changes.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ xnu/files/osfmk/arm64/loader_return.c | 46 +++++++++++++++++++++++++++
+ 1 file changed, 46 insertions(+)
+
+diff --git a/xnu/files/osfmk/arm64/loader_return.c b/xnu/files/osfmk/arm64/loader_return.c
+index 6711f87..d91d0c7 100644
+--- a/xnu/files/osfmk/arm64/loader_return.c
++++ b/xnu/files/osfmk/arm64/loader_return.c
+@@ -62,6 +62,49 @@ extern void hakios_ufs_quiesce(void);
+ extern void hakios_var_save_on_return(void);   /* drivers/storage/hakios.ufs.c: the data volume into the flash */
+ void loader_checkpoint(uint64_t n);
+ 
++/*
++ * The same for a SoC's or a device's own drivers (devices/<name>/.../drivers/), which no common file names: each
++ * registers what it needs done on the way back (hakios_return_register, when it starts), and that is done after
++ * the common drivers' own. `quiesce` is called in every return, a panic's too, with the other processors stopped
++ * (as hakios_*_quiesce above: no locks, no waiting on threads); `stop`, in a return that is not a panic, while
++ * there is still a thread to wait in (as hakios_*_stop). Either may be NULL.
++ */
++void hakios_return_register(void (*quiesce)(void), void (*stop)(void));
++
++#define LOADER_RETURN_HOOKS     8
++static struct {
++	void    (*quiesce)(void);
++	void    (*stop)(void);
++} loader_return_hooks[LOADER_RETURN_HOOKS];
++static uint32_t loader_return_hooks_taken;
++
++void
++hakios_return_register(void (*quiesce)(void), void (*stop)(void))
++{
++	uint32_t i = os_atomic_inc_orig(&loader_return_hooks_taken, relaxed);
++
++	if (i >= LOADER_RETURN_HOOKS) {
++		printf("loader_return: no room for another driver's return hooks (%u)\n", LOADER_RETURN_HOOKS);
++		return;
++	}
++	loader_return_hooks[i].quiesce = quiesce;
++	os_atomic_store(&loader_return_hooks[i].stop, stop, release);
++}
++
++static void
++loader_return_hooks_run(bool stop)
++{
++	uint32_t n = os_atomic_load(&loader_return_hooks_taken, acquire);
++
++	for (uint32_t i = 0; i < n && i < LOADER_RETURN_HOOKS; i++) {
++		void (*fn)(void) = stop ? os_atomic_load(&loader_return_hooks[i].stop, acquire) : loader_return_hooks[i].quiesce;
++
++		if (fn != NULL) {
++			fn();
++		}
++	}
++}
++
+ /* Also referenced from the early exception vector in start.s. */
+ char     loader_log[LOADER_LOG_SIZE];
+ uint32_t loader_log_len;
+@@ -381,6 +424,7 @@ loader_return(void)
+ 	hakios_torch_quiesce();        /* the flashlight off, if it was lit */
+ 	hakios_camera_quiesce();       /* the camera powered down, if it was powered up */
+ 	hakios_mic_quiesce();          /* (what the microphones' path did, said again: it happens in the log's middle) */
++	loader_return_hooks_run(false);        /* and what a SoC's or device's own drivers registered */
+ 	/*
+ 	 * A panic's text is first collected in the panic buffer and only later
+ 	 * flushed to the console; if the console itself is what failed, that
+@@ -444,6 +488,7 @@ loader_return_timer(__unused thread_call_param_t p0, __unused thread_call_param_
+ 		hakios_wifi_stop();            /* and the Wi-Fi DSP, if it runs, shut down */
+ 		hakios_adsp_stop();            /* and the audio DSP */
+ 		hakios_mpss_stop();            /* and the modem */
++		loader_return_hooks_run(true); /* and a SoC's or device's own drivers */
+ 	}
+ 	if (PE_parse_boot_argn("return_cpu", &cpu, sizeof(cpu)) && cpu <= (uint32_t)ml_get_max_cpu_number() &&
+ 	    cpu_xcall((int)cpu, loader_return_test, (void *)(uintptr_t)(as_panic ? 2 : 1)) == KERN_SUCCESS) {
+@@ -490,6 +535,7 @@ loader_stop_poll(__unused thread_call_param_t p0, __unused thread_call_param_t p
+ 		hakios_adreno_stop();
+ 		hakios_wifi_stop();
+ 		hakios_adsp_stop();
++		loader_return_hooks_run(true);
+ 		loader_return();
+ 	}
+ 	clock_interval_to_deadline(1, NSEC_PER_SEC, &deadline);

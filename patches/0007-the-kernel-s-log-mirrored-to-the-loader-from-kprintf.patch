@@ -1,0 +1,133 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: xorbidden <xorbidden@proton.me>
+Date: Thu, 29 Oct 2026 12:29:05 +0100
+Subject: [PATCH] the kernel's log mirrored to the loader from kprintf's start,
+ on a phone with no serial port
+
+Without a UART kprintf goes to the screen only, and nothing of the kernel's log reaches the loader's while
+the kernel runs: the copy of the message buffer is made at the return, so a loader watching from another
+core (bootcpu=7) that takes back a hung kernel found its log empty. Once kprintf has fallen back to the
+console, whatever is already in the message buffer is put into the loader's log, and from then on every
+character log_putc_locked() puts there; the copy at the return is then not made again. With a serial port
+(QEMU) nothing changes.
+
+Seen on the Mi 9T (hackios-xnu-kernel-davinci): hung runs on core 7 came back with their whole log.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ xnu/files/osfmk/arm64/loader_return.c | 31 ++++++++++++++++++++++-
+ xnu/hakios.patch                      | 36 ++++++++++++++++++++++++---
+ 2 files changed, 63 insertions(+), 4 deletions(-)
+
+diff --git a/xnu/files/osfmk/arm64/loader_return.c b/xnu/files/osfmk/arm64/loader_return.c
+index d91d0c7..0d5d0f8 100644
+--- a/xnu/files/osfmk/arm64/loader_return.c
++++ b/xnu/files/osfmk/arm64/loader_return.c
+@@ -382,6 +382,35 @@ loader_log_puts(const char *s)
+  * Everything printf()/IOLog()/os_log wrote ends up in the kernel message
+  * buffer (what dmesg shows), whether or not a console displayed it.
+  */
++/*
++ * Without a serial port (the phones) kprintf goes to the screen, and nothing reaches the loader's log while
++ * the kernel runs: a loader watching from another core (bootcpu=) found a hung kernel's log empty. From
++ * kprintf's start on, everything put in the message buffer goes here too (log_putc_locked), what is in it
++ * already first; the copy at the end is then not made again.
++ */
++bool loader_log_mirrors_msgbuf;
++
++void loader_log_start_mirror(void);
++
++void
++loader_log_start_mirror(void)
++{
++	struct msgbuf *mb = msgbufp;
++
++	if (mb != NULL && mb->msg_bufc != NULL && mb->msg_size > 0 && mb->msg_bufx >= 0 && mb->msg_bufx <= mb->msg_size) {
++		for (int pass = 0; pass < 2; pass++) {
++			int from = pass == 0 ? mb->msg_bufx : 0;
++			int to = pass == 0 ? mb->msg_size : mb->msg_bufx;
++			for (int i = from; i < to; i++) {
++				if (mb->msg_bufc[i] != 0) {
++					loader_log_putc(mb->msg_bufc[i]);
++				}
++			}
++		}
++	}
++	loader_log_mirrors_msgbuf = true;
++}
++
+ static void
+ loader_log_append_msgbuf(void)
+ {
+@@ -431,7 +460,7 @@ loader_return(void)
+ 	 * never happens. Append the buffer so the loader gets it either way.
+ 	 */
+ 	loader_log_linearize();
+-	if (!loader_return_entered) {
++	if (!loader_return_entered && !loader_log_mirrors_msgbuf) {
+ 		loader_log_append_msgbuf();
+ 	}
+ 	if (!loader_return_entered && debug_buf_base != NULL && debug_buf_ptr > debug_buf_base &&
+diff --git a/xnu/hakios.patch b/xnu/hakios.patch
+index 0386087..0c68734 100644
+--- a/xnu/hakios.patch
++++ b/xnu/hakios.patch
+@@ -921,6 +921,26 @@ index 003cfb074a99..c597065f24f1 100644
+  
+  	if (sock == NULL) {
+  		return EINVAL;
++diff --git a/bsd/kern/subr_log.c b/bsd/kern/subr_log.c
++index 3ff76469965d..d43eba5bfe92 100644
++--- a/bsd/kern/subr_log.c
+++++ b/bsd/kern/subr_log.c
++@@ -566,9 +566,15 @@ STARTUP(OSLOG, STARTUP_RANK_SECOND, oslog_init_firehose);
++  *		log entries do not end up interspersed due to preemption or
++  *		SMP reentrancy.
++  */
+++extern bool loader_log_mirrors_msgbuf;
+++extern void loader_log_putc(char c);
+++
++ void
++ log_putc_locked(struct msgbuf *mbp, char c)
++ {
+++	if (loader_log_mirrors_msgbuf && mbp == msgbufp) {
+++		loader_log_putc(c);             /* for a watching loader (osfmk/arm64/loader_return.c) */
+++	}
++ 	mbp->msg_bufc[mbp->msg_bufx++] = c;
++ 	if (mbp->msg_bufx >= mbp->msg_size) {
++ 		mbp->msg_bufx = 0;
+ diff --git a/bsd/kern/sys_generic.c b/bsd/kern/sys_generic.c
+ index 4ca22ee4371a..e95e618b4cb6 100644
+ --- a/bsd/kern/sys_generic.c
+@@ -3246,18 +3266,28 @@ index 3ad743fc3efb..ce036c5a2c26 100644
+  void
+  pe_init_fiq()
+ diff --git a/pexpert/arm/pe_kprintf.c b/pexpert/arm/pe_kprintf.c
+-index 65144c74239c..ab6260d52d84 100644
++index 65144c74239c..64d16cf6be3e 100644
+ --- a/pexpert/arm/pe_kprintf.c
+ +++ b/pexpert/arm/pe_kprintf.c
+-@@ -29,6 +29,7 @@ SECURITY_READ_ONLY_LATE(bool) enable_dklog_serial_output = false;
++@@ -29,6 +29,8 @@ SECURITY_READ_ONLY_LATE(bool) enable_dklog_serial_output = false;
+  static SIMPLE_LOCK_DECLARE(kprintf_lock, 0);
+  
+  static void serial_putc_crlf(char c);
+ +extern void loader_log_putc(char c);
+++extern void loader_log_start_mirror(void);
+  
+  __startup_func
+  static void
+-@@ -159,6 +160,7 @@ serial_putc_crlf(char c)
++@@ -67,6 +69,8 @@ PE_init_kprintf(void)
++ 		 * serial doesn't work).
++ 		 */
++ 		PE_kputc = console_write_unbuffered;
+++		/* nor does the loader's log get anything then: it gets the message buffer instead */
+++		loader_log_start_mirror();
++ 	}
++ }
++ STARTUP(KPRINTF, STARTUP_RANK_FIRST, PE_init_kprintf);
++@@ -159,6 +163,7 @@ serial_putc_crlf(char c)
+  	if (c == '\n') {
+  		uart_putc('\r');
+  	}

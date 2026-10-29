@@ -1,0 +1,7 @@
+# devices/davinci/soc/drivers/power/conf: the SM7150 family's power drivers (docs/drivers-config.md).
+
+driver CPUFREQ_OSM
+	file    bsd/dev/hakios.cpufreq_osm.c
+	replaces CPUFREQ
+	help    the cores at their top speed through the SM7150's OSM, EPSS's predecessor (cpufreq=1); no memory
+	help    vote, which the common driver makes at redwood's addresses

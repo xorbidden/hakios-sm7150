@@ -27,6 +27,11 @@ The rule for where a piece goes:
 | The boot image, xl and the run scripts for the configured device | patch 0002 (mkxnuimg.py, Makefile) |
 | The loader's davinci platform (framebuffer 0x9C000000, no flash log, timer PPI 19, UFS connect, charger) | patch 0003 |
 | The kernel's timer on the PPI the loader names | patch 0004 (gic_v3_irq.c) |
+| A panel driver can register two framebuffers (no tearing) | patch 0005 (MiniIOMobileFramebuffer, MiniIOSurface) |
+| Device drivers register their quiesce/stop on the way back | patch 0006 (loader_return.c) |
+| The kernel's log mirrored to the loader from kprintf's start | patch 0007 |
+| Kernel builds on Ubuntu (mawk, python3 only) | patches 0008, 0009 |
+| CPU clocks through the OSM (`cpufreq=1`) | `soc/drivers/power/hakios.cpufreq_osm.c`, `replaces CPUFREQ` (built; not yet run) |
 
 Left out on purpose: the old bring-up diagnostics (XNU_DIAG_* in the loader and UEFI, gic_v3_timer_report), the
 install-to-flash mode of the metal release (flashboot.c, darwinfile.c, crypto.c: upstream dropped it), and the kernel's
@@ -36,9 +41,6 @@ own UFS driver's first steps (ufs_alone, ufs_hc_area: never usable). They stay i
 
 | # | Part | Old files | Goes to | Notes |
 |---|---|---|---|---|
-| 1 | Hooks on the way back to the loader | loader_return.c (dsi, adsp_modem, vibrator quiesce/stop), GenericARMPE.cpp (dsi init) | a patch: a list drivers register their quiesce/stop in | so no common file names a davinci driver |
-| 2 | The log mirrored to the loader from kprintf's start | loader_return.c, xnu/hackios.patch | a patch | how a hung kernel's log reaches the computer on core 7 |
-| 3 | CPU clocks (OSM) | hk_cpufreq.c (cpufreq_osm=1) | `soc/drivers/power/hakios.cpufreq_osm.c` | |
 | 4 | Panel (DSI) and its framebuffers | hk_dsi.c, hk_display.c, MiniIOMobileFramebuffer.cpp, MiniIOSurface.* | `soc/drivers/gpu/hakios.dsi.c`; the framebuffer's two buffers and MiniIOSurfaceDisplayUse as a patch | the no-tearing work (562d911) is generic |
 | 5 | Touch, buttons | hk_gt9886.c; hk_buttons.c (board_pon, board_volume_up) | `drivers/input/hakios.gt9886.c`; buttons: a patch for the PMIC addresses as arguments | |
 | 6 | Storage through the loader | (works with patch 0003) | `CONFIG_HAKIOS_UFS=y` | check that the reads still go |

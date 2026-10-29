@@ -12,23 +12,26 @@ both is refused, naming both. Only a SoC's or device's conf may say it.
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 ---
- docs/drivers-config.md      |  1 +
+ docs/drivers-config.md      |  3 ++-
  drivers/core/hakios.stubs.c |  1 +
- tools/hakios-config.py      | 28 +++++++++++++++++++++++++---
- 3 files changed, 27 insertions(+), 3 deletions(-)
+ tools/hakios-config-test.py |  5 +++--
+ tools/hakios-config.py      | 44 +++++++++++++++++++++++++++++++------
+ 4 files changed, 43 insertions(+), 10 deletions(-)
 
 diff --git a/docs/drivers-config.md b/docs/drivers-config.md
-index 9498751..17ec9cc 100644
+index 9498751..3d665a5 100644
 --- a/docs/drivers-config.md
 +++ b/docs/drivers-config.md
-@@ -40,6 +40,7 @@ driver SOUND
+@@ -40,7 +40,8 @@ driver SOUND
  | `driver NAME` | the symbol `CONFIG_HAKIOS_NAME`, the XNU option `HAKIOS_NAME`, the attribute `hakios_name` |
  | `file PATH [OPTION...]` | one of its files, as its path in Apple's tree; a `.cpp` of `iokit/Kernel` also wants `iokitcpp` |
  | `requires NAME...` | drivers it cannot be built without (it calls them, and nothing could stand in for them) |
+-| `default y\|n` | what a configuration that does not name it gets; `y` if not said |
 +| `replaces NAME...` | (a SoC's or device's driver only) common drivers it stands in for: it defines what the rest of the kernel calls in them, so it is built instead of them, never with them, and it counts as them for `requires` and for `drivers/core/hakios.stubs.c` |
- | `default y\|n` | what a configuration that does not name it gets; `y` if not said |
++| `default y\|n` | what a configuration that does not name it gets; `y` if not said for a common driver, `n` for a SoC's or device's (another device's defconfig must not get it) |
  | `help TEXT` | what it is, and which boot-argument starts it; more `help` lines go on |
  
+ Every `.c` and `.cpp` of `drivers/map` is built by exactly one `standard` line or `driver`, of the conf of its own subsystem;
 diff --git a/drivers/core/hakios.stubs.c b/drivers/core/hakios.stubs.c
 index ed5ca7f..0a97ef5 100644
 --- a/drivers/core/hakios.stubs.c
@@ -41,8 +44,26 @@ index ed5ca7f..0a97ef5 100644
  
  /* the ends of a run (loader_return.c, the guards), which have no header of their own */
  void hakios_adsp_stop(void);
+diff --git a/tools/hakios-config-test.py b/tools/hakios-config-test.py
+index 159cea7..b428900 100755
+--- a/tools/hakios-config-test.py
++++ b/tools/hakios-config-test.py
+@@ -231,10 +231,11 @@ try:
+ 
+     # the drivers: compiled in, not arguments
+     check("redwood builds every driver, and they give no argument",
+-          all("CONFIG_%s=y" % d.symbol in open(cfg).read() for d in hc.DRIVERS) and len(hc.DRIVERS) >= 20 and
++          all("CONFIG_%s=y" % d.symbol in open(cfg).read() for d in hc.DRIVERS if d.origin is None) and len(hc.DRIVERS) >= 20 and
+           not any(x.startswith("hakios_") for x in args_of(run("args", "--config", cfg))), len(hc.DRIVERS))
+     built = hc.drivers_built({})
+-    check("a configuration that names no driver builds them all (their default)", all(built.values()), built)
++    check("a configuration that names no driver builds every common one (their default), and no SoC's or device's",
++          all(built[d.symbol] == (d.origin is None) for d in hc.DRIVERS), built)
+     off = dict(hc.parse(cfg)[0])
+     problems, _ = hc.check(dict(off, HAKIOS_ADSP="n"))
+     check("a driver without one it requires is refused (SOUND without ADSP)", any("CONFIG_HAKIOS_SOUND requires CONFIG_HAKIOS_ADSP" in p for p in problems), problems)
 diff --git a/tools/hakios-config.py b/tools/hakios-config.py
-index 68decaa..e2a2efe 100755
+index 68decaa..0d74d44 100755
 --- a/tools/hakios-config.py
 +++ b/tools/hakios-config.py
 @@ -198,6 +198,7 @@ class Driver:
@@ -53,7 +74,16 @@ index 68decaa..e2a2efe 100755
  
      def source(self, path):
          """Where a file of it is kept: drivers/<subsystem>/<name>, in this repository or in its own."""
-@@ -273,11 +274,16 @@ def load_drivers(root):
+@@ -243,6 +244,8 @@ def load_drivers(root):
+             if not raw[0].isspace():
+                 if words[0] == "driver" and len(words) == 2 and re.fullmatch(r"[A-Z][A-Z0-9_]*", words[1]):
+                     block = Driver(words[1], sub, where, origin)
++                    if origin is not None:
++                        block.default = "n"     # every device sees every checked-out repository's drivers: only its own defconfig turns one on
+                     drivers.append(block)
+                 elif words[0] == "standard" and len(words) >= 2:
+                     if origin is not None:
+@@ -273,11 +276,16 @@ def load_drivers(root):
                  elif key == "requires" and len(words) >= 2:
                      block.requires += words[1:]
                      continue
@@ -71,7 +101,7 @@ index 68decaa..e2a2efe 100755
              for f in files:
                  if not f.startswith(("bsd/dev/hakios.", "iokit/Kernel/hakios.")) or not f.endswith((".c", ".cpp")):
                      raise ConfigError("%s: %s is not a hakios.*.c or .cpp of bsd/dev/ or iokit/Kernel/" % (where, f))
-@@ -296,6 +302,9 @@ def load_drivers(root):
+@@ -296,6 +304,9 @@ def load_drivers(root):
                  close = difflib.get_close_matches(r, names, n=1)
                  raise ConfigError("%s: %s requires %s, which no drivers/*/conf declares%s" % (
                      d.where, d.name, r, " (did you mean %s?)" % close[0] if close else ""))
@@ -81,7 +111,7 @@ index 68decaa..e2a2efe 100755
      return drivers, [tuple(s) for s in standard]
  
  
-@@ -571,11 +580,16 @@ def check_drivers(config, parsed):
+@@ -571,12 +582,19 @@ def check_drivers(config, parsed):
      if DRIVERS_ERROR:
          return [DRIVERS_ERROR]
      built = drivers_built(config)
@@ -92,14 +122,48 @@ index 68decaa..e2a2efe 100755
 -                if not built["HAKIOS_" + r]:
 +                if not built["HAKIOS_" + r] and r not in standing_in:
                      problems.append("CONFIG_%s requires CONFIG_HAKIOS_%s (%s)" % (d.symbol, r, d.where))
+-    left_out = {os.path.basename(f) for d in DRIVERS if not built[d.symbol] for f, _tags in d.files}
 +            for r in d.replaces:
 +                if built["HAKIOS_" + r]:
 +                    problems.append("CONFIG_%s replaces CONFIG_HAKIOS_%s, which is built too: leave that one out (%s)" % (
 +                        d.symbol, r, d.where))
-     left_out = {os.path.basename(f) for d in DRIVERS if not built[d.symbol] for f, _tags in d.files}
++    # (an argument a replaced driver reads is read by the one in its place)
++    left_out = {os.path.basename(f) for d in DRIVERS if not built[d.symbol] and d.name not in standing_in
++                for f, _tags in d.files}
      if not left_out:
          return problems
-@@ -929,9 +943,17 @@ def master_hakios(built, sources):
+     readers = arg_readers()
+@@ -782,14 +800,16 @@ def listing(config, title_lines):
+     (or `# CONFIG_X is not set`) under it. Linux's defconfigs list only what differs from the defaults; this one lists everything,
+     because here a symbol's default is "the kernel decides" and a reader should see every setting there is."""
+     by_group = collections.defaultdict(list)
++    built = drivers_built(config)
+     for sym in SYMBOLS:
++        if sym[0] in DRIVER_BY_SYMBOL and DRIVER_BY_SYMBOL[sym[0]].origin is not None and not built[sym[0]]:
++            continue            # another repository's driver this configuration does not build: not its setting
+         by_group[GROUP_OF.get(sym[0], "User space")].append(sym)
+-    built = drivers_built(config)
+     config = {k: v for k, v in config.items() if k not in built}
+     config.update({k: "y" for k, on in built.items() if on})
+     out = list(title_lines)
+     out += ["# %d symbols in %d groups; %d are set, %d of them drivers built in." % (
+-        len(SYMBOLS), len([g for g in by_group if by_group[g]]), len(config), sum(built.values())), "#", ""]
++        sum(len(g) for g in by_group.values()), len([g for g in by_group if by_group[g]]), len(config), sum(built.values())), "#", ""]
+     for group in GROUP_ORDER + sorted(g for g in by_group if g not in GROUP_ORDER):
+         syms = by_group.get(group)
+         if not syms:
+@@ -840,7 +860,9 @@ def cmd_complete(a):
+         m = re.match(r"(?:# )?CONFIG_([A-Z0-9_]+)(?:=| is not set)", line.strip())
+         if m:
+             named.add(m.group(1))
+-    missing = [s[0] for s in SYMBOLS if s[0] not in named]
++    # (a SoC's or device's own driver is a setting of that one's configuration only)
++    missing = [s[0] for s in SYMBOLS if s[0] not in named and
++               not (s[0] in DRIVER_BY_SYMBOL and DRIVER_BY_SYMBOL[s[0]].origin is not None)]
+     for name in missing[:30]:
+         print("hakios-config: %s does not name CONFIG_%s" % (rel(a.root, path), name))
+     if len(missing) > 30:
+@@ -929,9 +951,17 @@ def master_hakios(built, sources):
      return "\n".join(lines) + "\n"
  
  

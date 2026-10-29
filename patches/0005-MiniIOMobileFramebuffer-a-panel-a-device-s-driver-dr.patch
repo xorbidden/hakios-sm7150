@@ -1,0 +1,435 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: xorbidden <xorbidden@proton.me>
+Date: Thu, 29 Oct 2026 12:27:37 +0100
+Subject: [PATCH] MiniIOMobileFramebuffer: a panel a device's driver drives can
+ take two framebuffers, and frames never tear
+
+A device whose own driver sends the panel its frames (the Mi 9T: DSI command mode, devices/davinci) registers
+a `struct hakios_panel` (hakios_panel_register): start (called by GenericARMPE before the framebuffer starts),
+a second framebuffer if it can have one, the boot framebuffer's address, and show. Every frame is then drawn
+into the framebuffer not shown and shown when it is whole (fb_flip=0: one, as before). Without a registered
+panel nothing changes: redwood's UEFI framebuffer is drawn into as it was.
+
+Two more causes of tearing gone, for every device: a swap's surfaces count as in use (IOSurfaceIsInUse,
+MiniIOSurfaceDisplayUse) until they have been copied, and SwapEnd / SwapWait come back only then, not when
+the copy starts; CoreAnimation drew into one surface in five while it was still being copied (69 of 600
+layers, measured on the Mi 9T, 2026-10-23).
+
+Seen on the Mi 9T (hackios-xnu-kernel-davinci 562d911, 1337d5f): no tearing, SpringBoard at 60 Hz.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ configs/boot-args.lst                         |   1 +
+ configs/common_defconfig                      |   7 +-
+ configs/symbols.tsv                           |   1 +
+ docs/boot-args.md                             |   5 +-
+ xnu/files/iokit/Kernel/GenericARMPE.cpp       |   1 +
+ xnu/files/iokit/Kernel/MiniDrivers.h          |   2 +
+ .../iokit/Kernel/MiniIOMobileFramebuffer.cpp  | 156 +++++++++++++++++-
+ xnu/files/iokit/Kernel/MiniIOSurface.cpp      |  17 ++
+ xnu/files/iokit/Kernel/MiniIOSurface.h        |   2 +
+ 9 files changed, 179 insertions(+), 13 deletions(-)
+
+diff --git a/configs/boot-args.lst b/configs/boot-args.lst
+index bc8e9c6..7e6d3eb 100644
+--- a/configs/boot-args.lst
++++ b/configs/boot-args.lst
+@@ -90,6 +90,7 @@ epoch	k
+ fb_beat	k
+ fb_diff	k
+ fb_filter	k
++fb_flip	k
+ fb_hz	k
+ fb_queue	k
+ fb_threads	k
+diff --git a/configs/common_defconfig b/configs/common_defconfig
+index 3d8b427..379e4a7 100644
+--- a/configs/common_defconfig
++++ b/configs/common_defconfig
+@@ -2,7 +2,7 @@
+ # HakiOS common defconfig: every setting there is, with what it does.
+ # Made by tools/hakios-config.py listing common -o <this file>; the values are the ones that file sets, and tests/CI check that it names every symbol.
+ #
+-# 341 symbols in 18 groups; 34 are set, 25 of them drivers built in.
++# 342 symbols in 18 groups; 34 are set, 25 of them drivers built in.
+ #
+ 
+ #
+@@ -329,7 +329,7 @@ CONFIG_TOUCHSCREEN=y
+ # CONFIG_VIRTIO_INPUT is not set
+ 
+ #
+-# GPU and display (68)
++# GPU and display (69)
+ #
+ 
+ # rendering on Adreno (an image built with GL=1; the GPU's firmware from your phone) [needs fw-gpu/ from the phone]
+@@ -383,6 +383,9 @@ CONFIG_GPU=y
+ # the picture is scaled to the panel nearest neighbour, as it once was
+ # CONFIG_FB_FILTER is not set
+ 
++# one framebuffer, drawn into while the panel is sent from it (as before; it tears)
++# CONFIG_FB_FLIP is not set
++
+ # read by MiniIOMobileFramebuffer.cpp (kernel)
+ # CONFIG_FB_HZ is not set
+ 
+diff --git a/configs/symbols.tsv b/configs/symbols.tsv
+index 6a3244b..f76afd9 100644
+--- a/configs/symbols.tsv
++++ b/configs/symbols.tsv
+@@ -81,6 +81,7 @@ DISPLAY_PROBE	arg	display_probe	GPU and display	k	hakios.adreno.c	before any ste
+ FB_BEAT	arg	fb_beat	GPU and display	k	MiniIOMobileFramebuffer.cpp	
+ FB_DIFF	arg	fb_diff	GPU and display	k	MiniIOMobileFramebuffer.cpp	which pixels of the panel each frame changed (it costs: the panel's memory is slow to read)
+ FB_FILTER	arg	fb_filter	GPU and display	k	MiniIOMobileFramebuffer.cpp	the picture is scaled to the panel nearest neighbour, as it once was
++FB_FLIP	arg	fb_flip	GPU and display	k	MiniIOMobileFramebuffer.cpp	one framebuffer, drawn into while the panel is sent from it (as before; it tears)
+ FB_HZ	arg	fb_hz	GPU and display	k	MiniIOMobileFramebuffer.cpp	
+ FB_QUEUE	arg	fb_queue	GPU and display	k	MiniIOMobileFramebuffer.cpp	
+ FB_THREADS	arg	fb_threads	GPU and display	k	MiniIOMobileFramebuffer.cpp	
+diff --git a/docs/boot-args.md b/docs/boot-args.md
+index df76645..15b8889 100644
+--- a/docs/boot-args.md
++++ b/docs/boot-args.md
+@@ -2,13 +2,13 @@
+ 
+ Made by `tools/boot-args.py --markdown`; CI fails if it is out of date with the source (`tools/boot-args.py --check`).
+ 
+-Every argument that the kernel, the loader or user space of this port reads, and which file reads it. **319 arguments**: 270 read by the kernel, 14 by the loader, 45 by user space (one is read in more than one place).
++Every argument that the kernel, the loader or user space of this port reads, and which file reads it. **320 arguments**: 271 read by the kernel, 14 by the loader, 45 by user space (one is read in more than one place).
+ 
+ This is a catalogue of what exists and who reads it, not a manual. What an argument means is in the head of the file that reads it. The stable switches have a symbol in the configuration (`tools/hakios-config.py help SYMBOL`, `docs/configs.md`); the rest are the knobs of bring-up (a driver's steps, pauses, traces, test modes) and can change with the driver. Any of them can be given in a configuration with `CONFIG_BOOTARGS="name=value ..."`, which checks that each name is in this list.
+ 
+ Layers: **K** the kernel, **L** the loader, **U** user space (through `sysctl kern.bootargs`).
+ 
+-## GPU and display (68)
++## GPU and display (69)
+ 
+ | Argument | Layer | Read by | Configuration | Set by |
+ |---|---|---|---|---|
+@@ -28,6 +28,7 @@ Layers: **K** the kernel, **L** the loader, **U** user space (through `sysctl ke
+ | `fb_beat` | K | `MiniIOMobileFramebuffer.cpp` | `CONFIG_FB_BEAT` |  |
+ | `fb_diff` | K | `MiniIOMobileFramebuffer.cpp` | `CONFIG_FB_DIFF` |  |
+ | `fb_filter` | K | `MiniIOMobileFramebuffer.cpp` | `CONFIG_FB_FILTER` |  |
++| `fb_flip` | K | `MiniIOMobileFramebuffer.cpp` | `CONFIG_FB_FLIP` |  |
+ | `fb_hz` | K | `MiniIOMobileFramebuffer.cpp` | `CONFIG_FB_HZ` |  |
+ | `fb_queue` | K | `MiniIOMobileFramebuffer.cpp` | `CONFIG_FB_QUEUE` |  |
+ | `fb_threads` | K | `MiniIOMobileFramebuffer.cpp` | `CONFIG_FB_THREADS` |  |
+diff --git a/xnu/files/iokit/Kernel/GenericARMPE.cpp b/xnu/files/iokit/Kernel/GenericARMPE.cpp
+index cfaa292..6c816af 100644
+--- a/xnu/files/iokit/Kernel/GenericARMPE.cpp
++++ b/xnu/files/iokit/Kernel/GenericARMPE.cpp
+@@ -300,6 +300,7 @@ GenericARMPE::start(IOService * provider)
+ 
+ 	/* Stand-ins for the closed graphics drivers that the iOS window server talks to. */
+ 	MiniIOSurfaceStart(this);
++	hakios_panel_start();       /* a panel a device's driver drives itself, up before its framebuffer (MiniIOMobileFramebuffer) */
+ 	MiniIOMobileFramebufferStart(this);
+ 	MiniAppleKeyStoreStart();
+ 	MiniIONetworkStackStart();
+diff --git a/xnu/files/iokit/Kernel/MiniDrivers.h b/xnu/files/iokit/Kernel/MiniDrivers.h
+index 1a35381..2f62920 100644
+--- a/xnu/files/iokit/Kernel/MiniDrivers.h
++++ b/xnu/files/iokit/Kernel/MiniDrivers.h
+@@ -15,6 +15,8 @@
+ 
+ void MiniIOSurfaceStart(IOService * provider);
+ void MiniIOMobileFramebufferStart(IOService * provider);
++/* a panel a device's own driver drives (MiniIOMobileFramebuffer.cpp, hakios_panel_register): up first */
++extern "C" void hakios_panel_start(void);
+ void MiniAppleKeyStoreStart(void);
+ void MiniIONetworkStackStart(void);
+ 
+diff --git a/xnu/files/iokit/Kernel/MiniIOMobileFramebuffer.cpp b/xnu/files/iokit/Kernel/MiniIOMobileFramebuffer.cpp
+index 68e3619..97a862d 100644
+--- a/xnu/files/iokit/Kernel/MiniIOMobileFramebuffer.cpp
++++ b/xnu/files/iokit/Kernel/MiniIOMobileFramebuffer.cpp
+@@ -38,6 +38,20 @@ extern struct vc_info vinfo;            /* the boot framebuffer, as the text con
+ #include "MiniIOSurface.h"
+ 
+ extern "C" void hakios_tl(const char * format, ...) __printflike(1, 2);
++/*
++ * A panel this kernel drives itself, by a device's own display driver (devices/davinci: hakios.dsi.c), can be fed
++ * from either of two framebuffers: the driver says so with hakios_panel_register(), and every frame is then drawn
++ * into the one not shown and shown when it is whole (flipSetup). Without one, the boot framebuffer as before.
++ */
++struct hakios_panel {
++	void            (*start)(void);                 /* before this driver starts (GenericARMPE): the panel up */
++	bool            (*second_buffer)(uint64_t * phys, vm_offset_t * mapped);       /* a second framebuffer, if any */
++	uint64_t        (*first_buffer)(void);          /* the boot framebuffer's physical address */
++	void            (*show)(uint64_t phys);         /* the panel sent from that one, once its transfer before is done */
++};
++extern "C" void hakios_panel_register(const struct hakios_panel * panel);
++extern "C" void hakios_panel_start(void);
++static const struct hakios_panel * gPanel;
+ 
+ /* IOConnectCallMethod selectors of the framebuffer user client (iOS 16.5) */
+ enum {
+@@ -142,6 +156,8 @@ static TUNABLE(uint32_t, gRecMegabytes, "rec_mb", 480);
+ static TUNABLE(uint32_t, gRecRing, "rec_ring", 0);
+ static TUNABLE(uint32_t, gRecStep, "rec_step", 3);
+ static TUNABLE(uint32_t, gDiff, "fb_diff", 0);
++/* boot-arg fb_flip=0: one framebuffer, drawn into while the panel is sent from it (as before; it tears) */
++static TUNABLE(uint32_t, gFlip, "fb_flip", 1);
+ /*
+  * Boot-arg fb_filter=0: the picture is scaled to the panel nearest neighbour, as it once was. The
+  * iPhone's 1125 x 2436 on this panel's 1080 x 2400 is 45 columns and 36 rows fewer: nearest
+@@ -227,7 +243,14 @@ class IOMobileFramebuffer : public IOService
+ 
+ public:
+ 	IOLock *        fLock;
+-	uint8_t *       fBase;                  /* the boot framebuffer: the panel */
++	uint8_t *       fBase;                  /* the boot framebuffer: the panel (with two: the one drawn into) */
++	/* two framebuffers (fb_flip): a frame drawn into the one not shown, then shown (flipSetup) */
++	bool            fFlipTried, fFlipping;
++	uint8_t *       fBuffer[2];
++	uint64_t        fBufferPhys[2];
++	unsigned        fBack;                  /* the one not shown */
++	uint32_t        fCopies, fCopiesChanged;        /* (fb_watch) layers copied, and those whose surface changed meanwhile */
++	void            flipSetup(void);
+ 	uint32_t        fPanelWidth, fPanelHeight, fRowBytes;
+ 	uint32_t        fWidth, fHeight;        /* the display as user space sees it */
+ 	MiniIOSurface * fDefaultSurface;
+@@ -249,6 +272,7 @@ public:
+ 	uint8_t         fSwap[SWAP_QUEUE][SWAP_SIZE];   /* the swaps on their way to the panel (fb_queue), from fSwapFirst on */
+ 	MiniIOSurface * fSwapSurfaces[SWAP_QUEUE][SWAP_LAYERS]; /* ... their surfaces, held from SwapEnd on: their maker may let go of them */
+ 	unsigned        fSwapFirst, fSwapsWaiting;
++	uint32_t        fSwapCopied;            /* the number of the last swap whose surfaces have been copied (SwapWait) */
+ 	/*
+ 	 * ... and not whenever the GPU happens to be done, but on a beat of the refresh rate
+ 	 * (boot-arg fb_beat=0: at once): frames then follow each other at an even pace whatever
+@@ -483,6 +507,31 @@ IOMobileFramebuffer::start(IOService * provider)
+ 	return true;
+ }
+ 
++/*
++ * At the first picture: is the panel one that can be fed from either of two framebuffers
++ * (hakios_panel_register)? Then frames are drawn into the one not shown and shown when they are
++ * whole, and none tears. (Asked only now: the panel's frames may start after this driver does.)
++ */
++void
++IOMobileFramebuffer::flipSetup(void)
++{
++	uint64_t phys;
++	vm_offset_t second;
++
++	fFlipTried = true;
++	if (gFlip == 0 || gPanel == NULL || !gPanel->second_buffer(&phys, &second)) {
++		return;
++	}
++	fBuffer[0] = (uint8_t *) vinfo.v_baseaddr;
++	fBufferPhys[0] = gPanel->first_buffer();
++	fBuffer[1] = (uint8_t *) second;
++	fBufferPhys[1] = phys;
++	fBack = 1;
++	fFlipping = true;
++	IOLog("MiniIOMobileFramebuffer: two framebuffers, %#llx and %#llx: each frame is drawn into the one not shown, then shown\n",
++	    fBufferPhys[0], fBufferPhys[1]);
++}
++
+ /*
+  * Are the first `rows` rows of a surface, `columns` 32-bit pixels of each, inside the memory it
+  * has? Its stride, element height and size come from whoever made it, so they are checked here,
+@@ -953,6 +1002,9 @@ IOMobileFramebuffer::present(const uint8_t * swap)
+ 		uint32_t sid = swapWord(swap, SWAP_SURFACE(layer));
+ 
+ 		fSwapSurfaces[slot][layer] = sid != 0 ? MiniIOSurfaceCopy(sid) : NULL;
++		if (fSwapSurfaces[slot][layer] != NULL) {
++			MiniIOSurfaceDisplayUse(fSwapSurfaces[slot][layer], 1);      /* (until it is copied: presenter) */
++		}
+ 	}
+ 	fSwapsWaiting++;
+ 	IOLockWakeup(fSwapLock, fSwap, true);
+@@ -982,6 +1034,7 @@ IOMobileFramebuffer::presenter(void)
+ 		show(swap, surfaces);
+ 		for (unsigned layer = 0; layer < SWAP_LAYERS; layer++) {
+ 			if (surfaces[layer] != NULL) {
++				MiniIOSurfaceDisplayUse(surfaces[layer], -1);
+ 				MiniIOSurfaceDrop(surfaces[layer]);
+ 			}
+ 		}
+@@ -1032,12 +1085,6 @@ IOMobileFramebuffer::show(const uint8_t * swap, MiniIOSurface ** surfaces)
+ 		}
+ 	}
+ 	shown = began;
+-	/* its turn has come: the swap after it may be handed over */
+-	IOLockLock(fSwapLock);
+-	fSwapFirst = (fSwapFirst + 1) % SWAP_QUEUE;
+-	fSwapsWaiting--;
+-	IOLockWakeup(fSwapLock, &fSwapsWaiting, true);
+-	IOLockUnlock(fSwapLock);
+ 	IOLockLock(fLock);
+ 	if (fLastFrame != 0) {
+ 		absolutetime_to_nanoseconds(began - fLastFrame, &nanos);
+@@ -1056,6 +1103,18 @@ IOMobileFramebuffer::show(const uint8_t * swap, MiniIOSurface ** surfaces)
+ 		    swapWord(swap, SWAP_ID), fSwapsShown, swapWord(swap, SWAP_SURFACE(0)), swapWord(swap, SWAP_SURFACE(1)),
+ 		    swapWord(swap, SWAP_SURFACE(2)), swapWord(swap, SWAP_SURFACE(3)), set, swapWord(swap, SWAP_LAYERS_CLEARED));
+ 	}
++	if (fGraphics && !fFlipTried) {
++		flipSetup();
++	}
++	if (fFlipping) {
++		/*
++		 * The one not shown was shown two frames ago, and the panel's show() waited for that
++		 * transfer to end before it started the last one: it is free, and this copy goes on
++		 * beside the panel's transfer of the frame before. (Waiting here for that transfer as
++		 * well made one frame cost a copy and a transfer one after the other: 15 a second.)
++		 */
++		fBase = fBuffer[fBack];
++	}
+ 	for (unsigned layer = 0; layer < SWAP_LAYERS; layer++) {
+ 		uint32_t sid = swapWord(swap, SWAP_SURFACE(layer));
+ 		int32_t src[4], dst[4];
+@@ -1098,12 +1157,60 @@ IOMobileFramebuffer::show(const uint8_t * swap, MiniIOSurface ** surfaces)
+ 				fGraphics = true;
+ 				PE_initialize_console(NULL, kPEGraphicsMode);
+ 			}
+-			drawLayer(s, src, dst);
++			if (fFlipping && fCopies < 600) {
++				/*
++				 * Does the window server write into the surface while it is being copied? Five
++				 * rows, summed before and after (for the first 600 frames only: it costs).
++				 */
++				const uint8_t * p = s->pixels();
++				uint64_t before = 0, after = 0;
++
++				for (uint32_t row = 0; row < 5; row++) {
++					const uint64_t * w = (const uint64_t *) (p + (size_t) (s->info.height * row / 5) * s->info.bytesPerRow);
++
++					for (uint32_t i = 0; i < s->info.width / 2; i++) {
++						before += w[i] * (i + 1);
++					}
++				}
++				drawLayer(s, src, dst);
++				for (uint32_t row = 0; row < 5; row++) {
++					const uint64_t * w = (const uint64_t *) (p + (size_t) (s->info.height * row / 5) * s->info.bytesPerRow);
++
++					for (uint32_t i = 0; i < s->info.width / 2; i++) {
++						after += w[i] * (i + 1);
++					}
++				}
++				fCopies++;
++				fCopiesChanged += before != after;
++				if (fCopies == 600) {
++					IOLog("MiniIOMobileFramebuffer: of 600 layers copied, %u had their surface changed while being copied\n",
++					    fCopiesChanged);
++				}
++			} else {
++				drawLayer(s, src, dst);
++			}
+ 			if (layer == 0) {
+ 				recorded = s;   /* (recorded once the frame is in the panel's memory: see below) */
+ 			}
+ 		}
+ 	}
++	if (fFlipping) {
++		gPanel->show(fBufferPhys[fBack]);
++		fBack ^= 1;
++	}
++	/*
++	 * Only now, with its surfaces copied, may the swap after it be handed over: SwapEnd coming back
++	 * is the window server's word that it may draw into a surface it gave before, and with that
++	 * done at the start of the copy, one in nine frames was drawn into while it was being copied
++	 * (2026-10-23: 69 of 600) -- the tearing that was left with two framebuffers.
++	 */
++	IOLockLock(fSwapLock);
++	fSwapFirst = (fSwapFirst + 1) % SWAP_QUEUE;
++	fSwapsWaiting--;
++	fSwapCopied = swapWord(swap, SWAP_ID);
++	IOLockWakeup(fSwapLock, &fSwapsWaiting, true);
++	IOLockWakeup(fSwapLock, &fSwapCopied, false);
++	IOLockUnlock(fSwapLock);
+ 	drawn = mach_absolute_time();
+ 	if (recorded != NULL) {
+ 		record(recorded);
+@@ -1415,11 +1522,28 @@ IOMobileFramebufferUserClient::externalMethod(uint32_t selector, IOExternalMetho
+ 		fOwner->present((const uint8_t *) args->structureInput);
+ 		return kIOReturnSuccess;
+ 
+-	case kFBMethodSwapWait:                         /* a swap is on the screen as soon as it is made */
++	case kFBMethodSwapWait:                         /* in: the swap's number: back once its surfaces are copied */
+ 		if (gTouchLat) {
+ 			hakios_tl("tl: w %llu %#llx %#llx at %llu\n", args->scalarInputCount > 0 ? in[0] : 0,
+ 			    args->scalarInputCount > 1 ? in[1] : 0, args->scalarInputCount > 2 ? in[2] : 0, micros(mach_absolute_time()));
+ 		}
++		/*
++		 * CoreAnimation draws into a swap's surfaces again once this comes back. Back at once, it
++		 * drew into one in five while it was still being copied to the panel (2026-10-23): the
++		 * tearing that was left once the panel had two framebuffers. 50 ms at the most: a swap
++		 * that is never shown (given up in present()) does not hold the window server for good.
++		 */
++		if (args->scalarInputCount > 0 && in[0] != 0) {
++			uint32_t wanted = (uint32_t) in[0];
++			AbsoluteTime deadline;
++
++			clock_interval_to_deadline(50, kMillisecondScale, &deadline);
++			IOLockLock(fOwner->fSwapLock);
++			while ((int32_t) (fOwner->fSwapCopied - wanted) < 0 &&
++			    IOLockSleepDeadline(fOwner->fSwapLock, &fOwner->fSwapCopied, deadline, THREAD_UNINT) != THREAD_TIMED_OUT) {
++			}
++			IOLockUnlock(fOwner->fSwapLock);
++		}
+ 		return kIOReturnSuccess;
+ 	case kFBMethodSwapSignal:
+ 	case kFBMethodSwapCancel:
+@@ -1591,6 +1715,20 @@ MiniIOMobileFramebufferShow(const uint8_t * pixels, uint32_t width, uint32_t hei
+ 	}
+ }
+ 
++extern "C" void
++hakios_panel_register(const struct hakios_panel * panel)
++{
++	gPanel = panel;
++}
++
++extern "C" void
++hakios_panel_start(void)
++{
++	if (gPanel != NULL && gPanel->start != NULL) {
++		gPanel->start();
++	}
++}
++
+ void
+ MiniIOMobileFramebufferStart(IOService * provider)
+ {
+diff --git a/xnu/files/iokit/Kernel/MiniIOSurface.cpp b/xnu/files/iokit/Kernel/MiniIOSurface.cpp
+index 63967e1..c86b114 100644
+--- a/xnu/files/iokit/Kernel/MiniIOSurface.cpp
++++ b/xnu/files/iokit/Kernel/MiniIOSurface.cpp
+@@ -744,6 +744,23 @@ surfaceUnhold(MiniIOSurface * s)
+ 	s->release();
+ }
+ 
++/*
++ * The display's own use of a surface, from the swap that gives it until it has been copied to the panel
++ * (MiniIOMobileFramebuffer): the use count CoreAnimation reads (IOSurfaceIsInUse) to know which of its
++ * surfaces it may draw the next frame into. Without it, one frame in five was drawn into while being
++ * copied (2026-10-23): the tearing.
++ */
++void
++MiniIOSurfaceDisplayUse(MiniIOSurface * s, int delta)
++{
++	IOLockLock(gSurfaceLock);
++	if (delta > 0 || s->useCount[0] != 0) {
++		s->useCount[0] += delta;
++		s->shared()->useCount = (uint64_t) s->useCount[1] << 32 | s->useCount[0];
++	}
++	IOLockUnlock(gSurfaceLock);
++}
++
+ MiniIOSurface *
+ MiniIOSurfaceCopy(uint32_t sid)
+ {
+diff --git a/xnu/files/iokit/Kernel/MiniIOSurface.h b/xnu/files/iokit/Kernel/MiniIOSurface.h
+index feccca0..3c3af92 100644
+--- a/xnu/files/iokit/Kernel/MiniIOSurface.h
++++ b/xnu/files/iokit/Kernel/MiniIOSurface.h
+@@ -163,6 +163,8 @@ MiniIOSurface * MiniIOSurfaceCopy(uint32_t sid);
+ void            MiniIOSurfaceCost(uint32_t * made, uint64_t * making, uint32_t * freed, uint64_t * freeing, uint32_t * again);
+ /* Clear the memory that is kept of surfaces that are gone, for the next ones: when the caller has a moment. */
+ void            MiniIOSurfaceClearKept(void);
++/* The display's own use of a surface, from its swap until it is copied to the panel (MiniIOMobileFramebuffer). */
++void MiniIOSurfaceDisplayUse(MiniIOSurface * s, int delta);
+ /* Wait, for so many milliseconds at most, until the GPU is done with a surface's pixels (hakios.gpu.cpp). */
+ bool            MiniIOSurfaceDrawn(MiniIOSurface * surface, uint64_t milliseconds);
+ MiniIOSurface * MiniIOSurfaceCreateSimple(uint32_t width, uint32_t height, uint32_t pixelFormat);

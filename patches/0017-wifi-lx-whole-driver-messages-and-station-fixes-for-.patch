@@ -1,0 +1,484 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: xorbidden <xorbidden@proton.me>
+Date: Thu, 29 Oct 2026 13:46:13 +0100
+Subject: [PATCH] wifi/lx: whole driver messages, and station fixes for drivers
+ without offload
+
+lx_base.c: lx_vformat(), vsnprintf() with Linux's %p extensions the
+kernel's does not know: %pV (every ath10k/ath11k message goes through
+it and printed as a pointer and a "V"), %pM, %pa/%pad. Every message
+also ends its line, as printk's do, so they no longer run together into
+lines the kernel's log cuts off.
+
+lx_80211.c, for a driver without Ethernet offload (ath10k on the
+WCN3990):
+- the 4-way handshake's messages 2 and 4 go out as 802.11 QoS data on
+  TID 7 with no key, as mac80211 sends them, so the driver marks them
+  not to be encrypted; the pairwise key goes in 10 ms after message 4
+  is queued, as in Linux. As Ethernet frames the access point ended the
+  connection with reason 15;
+- the link's transmit power is the channel's (BSS_CHANGED_TXPOWER),
+  not 0 dBm;
+- a handshake message that arrives before the driver knows of the
+  association is held and answered right after it;
+- no VHT peer on an interface started in an HT mode (a 20 MHz channel).
+Drivers with Ethernet offload (ath11k) behave as before.
+
+mk-ath11k.sh: compare objects with the script by its full path; $0
+was relative and the comparison ran from the build directory.
+
+Tested on the Mi 9T (old port, ath10k): WPA2-Personal joined, DHCP,
+Settings shows the network, Safari loads pages.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ tools/mk-ath11k.sh     |   3 +-
+ wifi/lx/src/lx.h       |   2 +
+ wifi/lx/src/lx_80211.c | 140 ++++++++++++++++++++++++++++++++++++-
+ wifi/lx/src/lx_base.c  | 153 ++++++++++++++++++++++++++++++++++++++++-
+ 4 files changed, 292 insertions(+), 6 deletions(-)
+
+diff --git a/tools/mk-ath11k.sh b/tools/mk-ath11k.sh
+index c9783b5..e58ae18 100755
+--- a/tools/mk-ath11k.sh
++++ b/tools/mk-ath11k.sh
+@@ -36,6 +36,7 @@
+ #
+ # usage: tools/mk-ath11k.sh [fetch]        "fetch" stops when the driver's sources are there
+ set -e
++SELF=$(readlink -f "$0")            # (by its whole path: the compiling below is done from the build directory)
+ VERSION=7.0.14
+ SHA256=de9999b784d2293f00d39c62d8f92a08ab8a54bc4e80ffd250a0c09cb07a0f98
+ ROOT=$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)
+@@ -137,7 +138,7 @@ rm -f obj/*.err
+ compile() {		# compile SOURCE OBJECT [FLAGS]: only when the object is older than anything it was made of
+ 	local src=$1 obj=$2
+ 	shift 2
+-	if [ -f "$obj" ] && [ -f "$obj.d" ] && [ -z "$(find $(sed -e 's/^[^:]*://' -e 's/\\$//' "$obj.d") "$0" -newer "$obj" 2>/dev/null | head -1)" ]; then
++	if [ -f "$obj" ] && [ -f "$obj.d" ] && [ -z "$(find $(sed -e 's/^[^:]*://' -e 's/\\$//' "$obj.d") "$SELF" -newer "$obj" 2>/dev/null | head -1)" ]; then
+ 		return
+ 	fi
+ 	$CC $CFLAGS "$@" -MMD -MF "$obj.d" -c "$src" -o "$obj" 2> "$obj.err" || rm -f "$obj"
+diff --git a/wifi/lx/src/lx.h b/wifi/lx/src/lx.h
+index 0625ebb..739f272 100644
+--- a/wifi/lx/src/lx.h
++++ b/wifi/lx/src/lx.h
+@@ -6,6 +6,8 @@ int	lx_base_init(void);		/* lx_base.c: the thread that counts the ticks and runs
+ int	lx_pool_init(void);		/* lx_base.c: the memory the radio reads and writes; 0, or an errno */
+ long	lx_stub(const char *name);	/* lx_base.c: what a function that is not there yet does */
+ void	lx_tell(const char *format, ...) __printflike(1, 2);	/* lx_base.c: a line that is always said (printf: may be kept back) */
++size_t	lx_vformat(char *out, size_t size, const char *format, va_list *list);	/* lx_base.c: vsnprintf() with Linux's %pV, %pM, %pa */
++void	lx_line_end(char *line, size_t size);	/* lx_base.c: a message ends its line, as printk's do */
+ void	lx_memory_say(void);		/* lx_base.c: what the layer holds of memory */
+ void	lx_pause_ms(unsigned ms);	/* lx_base.c: sleep */
+ void	lx_mark(const char *what);	/* lx_base.c: a point reached, said and waited at if the kernel was asked to */
+diff --git a/wifi/lx/src/lx_80211.c b/wifi/lx/src/lx_80211.c
+index a9c94da..1d33b18 100644
+--- a/wifi/lx/src/lx_80211.c
++++ b/wifi/lx/src/lx_80211.c
+@@ -108,6 +108,13 @@ struct lx_radio {
+ 	struct lx_wpa wpa;
+ 	volatile int handshake;			/* the last thing lx_wpa_message() said */
+ 	const char *handshake_why;
++	/* our last handshake frame sent as 802.11 (a driver without Ethernet offload), and what became of it (said in the log) */
++	struct sk_buff *volatile handshake_skb;
++	volatile int handshake_fate;		/* 0 not yet, 1 acknowledged, 2 not acknowledged, 3 dropped by the driver */
++	/* the driver has been told of the association; a handshake message that came before is held till then */
++	volatile bool assoc_told;
++	uint8_t held[512];
++	volatile unsigned held_length;
+ 	struct work_struct group_work;		/* a new group key, later on */
+ 	/* block ack: the access point's requests to send us frames in aggregates, by traffic class (TID) */
+ 	struct work_struct ba_work;
+@@ -482,9 +489,27 @@ linuxkpi_ieee80211_handle_wake_tx_queue(struct ieee80211_hw *hw, struct ieee8021
+ {
+ }
+ 
++/* what became of a frame: kept only for our handshake's (its acknowledgement decides when the keys go in) */
++static void
++frame_fate(struct sk_buff *skb, bool dropped)
++{
++	struct lx_radio *radio = the_radio;
++
++	if (radio != NULL && skb != NULL && skb == radio->handshake_skb) {
++		lx_os_lock();
++		radio->handshake_fate = dropped ? 3 : IEEE80211_SKB_CB(skb)->flags & IEEE80211_TX_STAT_ACK ? 1 : 2;
++		radio->handshake_skb = NULL;
++		lx_os_wakeup(&radio->handshake_fate);
++		lx_os_unlock();
++		printf("lx: the handshake: our last frame %s\n", radio->handshake_fate == 1 ? "is acknowledged" :
++		    radio->handshake_fate == 2 ? "is NOT acknowledged" : "is DROPPED by the driver");
++	}
++}
++
+ void
+ linuxkpi_ieee80211_tx_status(struct ieee80211_hw *hw, struct sk_buff *skb)
+ {
++	frame_fate(skb, false);
+ 	dev_kfree_skb_any(skb);
+ }
+ 
+@@ -492,6 +517,7 @@ void
+ linuxkpi_ieee80211_tx_status_ext(struct ieee80211_hw *hw, struct ieee80211_tx_status *status)
+ {
+ 	if (status->skb != NULL) {
++		frame_fate(status->skb, false);
+ 		dev_kfree_skb_any(status->skb);
+ 	}
+ }
+@@ -499,6 +525,7 @@ linuxkpi_ieee80211_tx_status_ext(struct ieee80211_hw *hw, struct ieee80211_tx_st
+ void
+ linuxkpi_ieee80211_free_txskb(struct ieee80211_hw *hw, struct sk_buff *skb, int status)
+ {
++	frame_fate(skb, true);
+ 	dev_kfree_skb_any(skb);
+ }
+ 
+@@ -751,6 +778,58 @@ ethernet_send(struct lx_radio *radio, const uint8_t *frame, unsigned length)
+ 	return (true);
+ }
+ 
++/*
++ * A message of the handshake (messages 2 and 4: before there is a pairwise key) as mac80211 sends it
++ * for a driver without Ethernet offload (ath10k on the Mi 9T): an 802.11 QoS data frame to the access
++ * point on TID 7 (the control port's), with no key, so that the driver marks it "not to be ciphered"
++ * (ath10k: ATH10K_SKB_F_NO_HWCRYPT, the descriptor's NO_ENCRYPT) -- as an Ethernet frame the firmware
++ * decides, and ciphers a message 4 still queued when the pairwise key arrives. What became of it is
++ * kept (frame_fate()).
++ */
++static bool
++handshake_send(struct lx_radio *radio, const uint8_t *frame, unsigned length)
++{
++	static const uint8_t llc_snap[6] = { 0xaa, 0xaa, 0x03, 0x00, 0x00, 0x00 };
++	struct sk_buff *skb;
++	uint8_t *f;
++	unsigned payload = length - 14;
++
++	if (radio->vif == NULL || radio->sta == NULL || (skb = frame_new(radio, 26 + 8 + payload, &f)) == NULL) {
++		radio->sent_lost++;
++		return (false);
++	}
++	bzero(f, 26);
++	f[0] = 0x88;				/* data, QoS */
++	f[1] = 0x01;				/* to the distribution system */
++	memcpy(f + 4, radio->target.address, ETH_ALEN);	/* the access point (BSSID) */
++	memcpy(f + 10, frame + 6, ETH_ALEN);		/* us */
++	memcpy(f + 16, frame, ETH_ALEN);		/* the destination: the access point */
++	f[24] = 7;				/* TID 7 */
++	memcpy(f + 26, llc_snap, sizeof(llc_snap));
++	memcpy(f + 32, frame + 12, 2);		/* 0x888e */
++	memcpy(f + 34, frame + 14, payload);
++	skb->priority = 7;
++	IEEE80211_SKB_CB(skb)->flags |= IEEE80211_TX_CTL_REQ_TX_STATUS;
++	IEEE80211_SKB_CB(skb)->control.hw_key = NULL;
++	lx_os_lock();
++	radio->handshake_skb = skb;
++	radio->handshake_fate = 0;
++	lx_os_unlock();
++	radio->sent++;
++	frame_send(radio, skb);
++	return (true);
++}
++
++/* a handshake frame of ours: as 802.11 where the driver takes no Ethernet, and while there is no pairwise key */
++static bool
++eapol_send(struct lx_radio *radio, const uint8_t *frame, unsigned length)
++{
++	if (!(radio->vif->offload_flags & IEEE80211_OFFLOAD_ENCAP_ENABLED) && radio->pairwise_key == NULL) {
++		return (handshake_send(radio, frame, length));
++	}
++	return (ethernet_send(radio, frame, length));
++}
++
+ /*
+  * An 802.11 data frame made into the Ethernet frame it carries, in place: the driver hands two
+  * kinds over in 802.11 although the firmware had them as Ethernet -- the handshake's, and what
+@@ -804,7 +883,7 @@ handshake_message(struct lx_radio *radio, const uint8_t *frame, unsigned length)
+ 		memcpy(reply + 6, radio->vif->addr, ETH_ALEN);
+ 		reply[12] = 0x88;
+ 		reply[13] = 0x8e;
+-		ethernet_send(radio, reply, 14 + reply_length);
++		eapol_send(radio, reply, 14 + reply_length);
+ 	}
+ 	printf("lx: the handshake: a message of %u bytes from the access point: %s%s\n", length - 14, said == LX_WPA_ANSWER ?
+ 	    "its first; answered with ours (message 2)" : said == LX_WPA_KEYS ? "its second, SIGNED WITH THE KEY WE HAVE TOO, and "
+@@ -834,6 +913,19 @@ static void
+ ethernet_received(struct lx_radio *radio, struct sk_buff *skb)
+ {
+ 	if (skb->len >= 14 && skb->data[12] == 0x88 && skb->data[13] == 0x8e) {
++		/*
++		 * Not answered before the driver knows of the association (its peer set up, the interface up),
++		 * as mac80211 has it: the access point's first message comes within milliseconds of its
++		 * answer, and answers queued before that were not acknowledged on 5 GHz (reason 15).
++		 */
++		lx_os_lock();
++		if (!radio->assoc_told && skb->len <= sizeof(radio->held)) {
++			memcpy(radio->held, skb->data, skb->len);
++			radio->held_length = skb->len;
++			lx_os_unlock();
++			return;
++		}
++		lx_os_unlock();
+ 		handshake_message(radio, skb->data, skb->len);
+ 	} else if (radio->joined && skb->len >= 14) {
+ 		*(skb->data[0] & 1 ? &radio->received_group : &radio->received) += 1;
+@@ -1252,7 +1344,14 @@ station_abilities(struct lx_radio *radio, const uint8_t *elements, unsigned leng
+ 		memcpy(&ht->mcs, e + 5, sizeof(ht->mcs));
+ 		sta->deflink.rx_nss = ht->mcs.rx_mask[1] != 0 ? 2 : 1;
+ 	}
+-	if ((e = element(elements, length, 191)) != NULL && e[1] >= 12 && band->vht_cap.vht_supported) {	/* VHT capabilities */
++	/*
++	 * VHT capabilities -- not for a driver that takes the interface's mode from the channel's width
++	 * alone (ath10k: 20 MHz on 5 GHz is 11na-ht20) while the channel is narrower than VHT's 80 MHz:
++	 * a VHT peer on an HT interface had none of its frames acknowledged after the peer was set up
++	 * (the handshake's: reason 15). mac80211 drops VHT from a connection made without it, too.
++	 */
++	if ((e = element(elements, length, 191)) != NULL && e[1] >= 12 && band->vht_cap.vht_supported &&
++	    (radio->width >= 80 || (radio->vif->offload_flags & IEEE80211_OFFLOAD_ENCAP_ENABLED))) {
+ 		struct ieee80211_sta_vht_cap *vht = &sta->deflink.vht_cap;
+ 
+ 		vht->vht_supported = true;
+@@ -1698,6 +1797,8 @@ station_join(struct lx_radio *radio, const struct hakios_sta_join *what)
+ 	radio->wpa.rsn = radio->rsn;
+ 	radio->wpa.rsn_length = 22;
+ 	radio->handshake = LX_WPA_NOTHING;
++	radio->assoc_told = false;
++	radio->held_length = 0;
+ 	printf("lx: the key of the name (%u bytes) and the passphrase (%u bytes; 0: the key itself was given) is there: %llu ms\n",
+ 	    name_length, what->passphrase_length, (lx_os_nanoseconds() - began) / 1000000ull);
+ 
+@@ -1734,6 +1835,14 @@ station_join(struct lx_radio *radio, const struct hakios_sta_join *what)
+ 		error = -ret;
+ 		goto out;
+ 	}
++	/*
++	 * The power to send with: the channel's (mac80211 gives the link its channel's). Left at 0, a
++	 * driver that takes it from the link (ath10k) sends at 0 dBm: on 5 GHz the access point did not
++	 * hear our message 4 (not acknowledged; reason 15), on 2.4 GHz it did.
++	 */
++	vif->bss_conf.txpower = channel->max_power > 0 ? channel->max_power : 20;
++	bss_changed(radio, BSS_CHANGED_TXPOWER);
++	printf("lx: the power to send with: %d dBm\n", vif->bss_conf.txpower);
+ 
+ 	/* the access point as a station of the driver's: the firmware learns of it, and the radio goes to its channel */
+ 	radio->sta = (struct ieee80211_sta *)roundup2((uintptr_t)radio->sta_memory, 64);
+@@ -1822,6 +1931,20 @@ station_join(struct lx_radio *radio, const struct hakios_sta_join *what)
+ 		}
+ 		mutex_unlock(&hw->wiphy->mtx);
+ 	}
++	{
++		unsigned held;
++
++		lx_os_lock();
++		radio->assoc_told = true;
++		held = radio->held_length;
++		radio->held_length = 0;
++		lx_os_unlock();
++		if (held != 0) {
++			printf("lx: the handshake: the access point's first message came before the driver knew of the association: "
++			    "answered now\n");
++			handshake_message(radio, radio->held, held);
++		}
++	}
+ 	printf("lx: the driver is told of the association (rates %#x, HT %s, VHT %s, %u streams)\n",
+ 	    radio->sta->deflink.supp_rates[channel->band], radio->sta->deflink.ht_cap.ht_supported ? "yes" : "no",
+ 	    radio->sta->deflink.vht_cap.vht_supported ? "yes" : "no", radio->sta->deflink.rx_nss);
+@@ -1847,7 +1970,18 @@ station_join(struct lx_radio *radio, const struct hakios_sta_join *what)
+ 		error = EAUTH;
+ 		goto out;
+ 	}
+-	lx_pause_ms(30);			/* (for message 4 to have left unciphered, before there is a key to cipher with) */
++	if (!(vif->offload_flags & IEEE80211_OFFLOAD_ENCAP_ENABLED)) {
++		/*
++		 * The keys go in right after message 4 is queued, as Linux has it: the firmware (ath10k's
++		 * WCN3990) holds message 4 until the pairwise key is installed, then sends it in the clear
++		 * (it was sent unciphered by handshake_send()) and reports it acknowledged. Waiting for that
++		 * acknowledgement first only delays both (300 ms on the phone, 24 October), and an access
++		 * point that waits too long for message 4 ends the connection (reason 15).
++		 */
++		lx_pause_ms(10);
++	} else {
++		lx_pause_ms(30);		/* (for message 4 to have left unciphered, before there is a key to cipher with) */
++	}
+ 	radio->pairwise_key = key_set(radio, radio->wpa.pairwise, 0, true, &ret);
+ 	if (ret == 0) {
+ 		radio->group_key = key_set(radio, radio->wpa.group, radio->wpa.group_index, false, &ret);
+diff --git a/wifi/lx/src/lx_base.c b/wifi/lx/src/lx_base.c
+index 86def50..ae086c9 100644
+--- a/wifi/lx/src/lx_base.c
++++ b/wifi/lx/src/lx_base.c
+@@ -47,6 +47,154 @@
+ 
+ /* ---- saying things ------------------------------------------------------------------------- */
+ 
++/*
++ * vsnprintf() with Linux's extensions of %p, which the kernel's does not know: %pV (a format and
++ * its arguments, struct va_format: every message of ath10k's and ath11k's own goes through it),
++ * %pM (an address of six bytes), %pa and %pad (a physical or DMA address, given by reference);
++ * any other %p<letters> is the pointer. The rest is the kernel's, one conversion at a time.
++ */
++size_t
++lx_vformat(char *out, size_t size, const char *format, va_list *list)
++{
++	size_t at = 0;
++
++#define LX_ROOM	(at < size ? size - at : 0)
++#define LX_ADD(n) do { int lx_n = (n); at += lx_n > 0 ? (size_t)lx_n : 0; } while (0)
++	for (const char *f = format; *f != 0; f++) {
++		char spec[24];
++		size_t n = 0;
++		int longs = 0, half = 0, wide = 0;
++
++		if (*f != '%') {
++			if (at + 1 < size) {
++				out[at] = *f;
++			}
++			at++;
++			continue;
++		}
++		spec[n++] = *f++;
++		while (*f != 0 && strchr("-+ #0", *f) != NULL && n < sizeof(spec) - 8) {
++			spec[n++] = *f++;
++		}
++		if (*f == '*') {
++			n += (size_t)snprintf(spec + n, sizeof(spec) - n, "%d", va_arg(*list, int));
++			f++;
++		}
++		while (*f >= '0' && *f <= '9' && n < sizeof(spec) - 8) {
++			spec[n++] = *f++;
++		}
++		if (*f == '.') {
++			spec[n++] = *f++;
++			if (*f == '*') {
++				n += (size_t)snprintf(spec + n, sizeof(spec) - n, "%d", va_arg(*list, int));
++				f++;
++			}
++			while (*f >= '0' && *f <= '9' && n < sizeof(spec) - 8) {
++				spec[n++] = *f++;
++			}
++		}
++		for (;; f++) {
++			if (*f == 'l' || *f == 'q' || *f == 'L') {
++				longs++;
++			} else if (*f == 'h') {
++				half++;
++			} else if (*f == 'z' || *f == 'j' || *f == 't') {
++				wide = 1;
++			} else {
++				break;
++			}
++		}
++		if (*f == 0) {
++			break;
++		}
++		if (*f == '%') {
++			LX_ADD(snprintf(out + at, LX_ROOM, "%%"));
++		} else if (*f == 'p') {
++			void *pointer = va_arg(*list, void *);
++
++			if (f[1] == 'V') {
++				const struct va_format *vf = pointer;
++				va_list copy;
++
++				va_copy(copy, *vf->va);
++				at += lx_vformat(out + (at < size ? at : size), LX_ROOM, vf->fmt, &copy);
++				va_end(copy);
++				f++;
++			} else if (f[1] == 'M' || f[1] == 'm') {
++				const uint8_t *b = pointer;
++
++				LX_ADD(snprintf(out + at, LX_ROOM, f[1] == 'M' ? "%02x:%02x:%02x:%02x:%02x:%02x" : "%02x%02x%02x%02x%02x%02x",
++				    b[0], b[1], b[2], b[3], b[4], b[5]));
++				f++;
++			} else if (f[1] == 'a') {
++				LX_ADD(snprintf(out + at, LX_ROOM, "%#llx", (unsigned long long)*(const uint64_t *)pointer));
++				f++;
++				if (f[1] == 'd' || f[1] == 'p') {
++					f++;
++				}
++			} else {
++				LX_ADD(snprintf(out + at, LX_ROOM, "%p", pointer));
++				while ((f[1] >= 'a' && f[1] <= 'z') || (f[1] >= 'A' && f[1] <= 'Z')) {
++					f++;
++				}
++			}
++		} else if (*f == 's') {
++			spec[n++] = 's';
++			spec[n] = 0;
++			LX_ADD(snprintf(out + at, LX_ROOM, spec, va_arg(*list, const char *)));
++		} else if (strchr("diouxXc", *f) != NULL) {
++			bool is_signed = *f == 'd' || *f == 'i';
++
++			if (longs >= 2 || longs == 1 || wide) {
++				spec[n++] = 'l';
++				spec[n++] = 'l';
++				spec[n++] = *f;
++				spec[n] = 0;
++				if (is_signed) {
++					LX_ADD(snprintf(out + at, LX_ROOM, spec, longs >= 2 ? va_arg(*list, long long) : (long long)va_arg(*list, long)));
++				} else {
++					LX_ADD(snprintf(out + at, LX_ROOM, spec, longs >= 2 ? va_arg(*list, unsigned long long) :
++					    (unsigned long long)va_arg(*list, unsigned long)));
++				}
++			} else {
++				spec[n++] = *f;
++				spec[n] = 0;
++				if (is_signed || *f == 'c') {
++					int v = va_arg(*list, int);
++
++					LX_ADD(snprintf(out + at, LX_ROOM, spec, half == 2 ? (int)(signed char)v : half == 1 ? (int)(short)v : v));
++				} else {
++					unsigned v = va_arg(*list, unsigned);
++
++					LX_ADD(snprintf(out + at, LX_ROOM, spec, half == 2 ? (unsigned)(unsigned char)v : half == 1 ?
++					    (unsigned)(unsigned short)v : v));
++				}
++			}
++		} else {
++			/* (a conversion this does not know: said as it is, its argument left alone) */
++			LX_ADD(snprintf(out + at, LX_ROOM, "%%%c", *f));
++		}
++	}
++	if (size > 0) {
++		out[at < size ? at : size - 1] = 0;
++	}
++#undef LX_ADD
++#undef LX_ROOM
++	return (at);
++}
++
++/* a message ends its line, as printk's do in Linux whether or not it says so (drivers often do not) */
++void
++lx_line_end(char *line, size_t size)
++{
++	size_t n = strlen(line);
++
++	if (n > 0 && line[n - 1] != '\n' && n + 1 < size) {
++		line[n] = '\n';
++		line[n + 1] = 0;
++	}
++}
++
+ int
+ printf(const char *format, ...)
+ {
+@@ -54,8 +202,9 @@ printf(const char *format, ...)
+ 	va_list list;
+ 
+ 	va_start(list, format);
+-	vsnprintf(line, sizeof(line), format, list);
++	lx_vformat(line, sizeof(line) - 1, format, &list);
+ 	va_end(list);
++	lx_line_end(line, sizeof(line));
+ 	lx_os_print(line);
+ 	return (0);
+ }
+@@ -68,7 +217,7 @@ lx_tell(const char *format, ...)
+ 	va_list list;
+ 
+ 	va_start(list, format);
+-	vsnprintf(line, sizeof(line), format, list);
++	lx_vformat(line, sizeof(line), format, &list);
+ 	va_end(list);
+ 	lx_os_tell(line);
+ }

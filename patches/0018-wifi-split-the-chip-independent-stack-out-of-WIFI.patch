@@ -1,0 +1,159 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: xorbidden <xorbidden@proton.me>
+Date: Thu, 29 Oct 2026 13:48:34 +0100
+Subject: [PATCH] wifi: split the chip-independent stack out of WIFI
+
+WIFI built the WCN6750's bring-up (hakios.wifi.c, hakios.wlfw.c)
+together with what is not the chip's: the host of Linux's driver
+object, the station and the Apple80211 surface (hakios.lx.c, .sta.c,
+.apple80211.c, .wlan.cpp). A SoC with another radio (the SM7150's
+WCN3990, under ath10k) replaces the bring-up but needs the rest.
+
+- WIFI_STACK builds the stack and requires WIFI; WIFI keeps the
+  bring-up and requires QMI and WIFI_STACK. A SoC driver that
+  `replaces WIFI` satisfies the stack's requirement.
+- The stand-ins for hakios_apple80211_ioctl and HakiosWLANStart follow
+  WIFI_STACK.
+- xnu-build.sh links the Linux driver object when WIFI_STACK is built,
+  and takes it from devices/<device>/lx.object when the configured
+  device names one (default: ath11k's, as before).
+
+No change for redwood: both symbols are on by default and the same
+files are built.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ configs/common_defconfig    |  9 ++++++---
+ docs/drivers-config.md      |  4 ++--
+ drivers/core/hakios.stubs.c |  3 +++
+ drivers/wifi/conf           | 20 +++++++++++++-------
+ xnu-build.sh                | 11 ++++++++---
+ 5 files changed, 32 insertions(+), 15 deletions(-)
+
+diff --git a/configs/common_defconfig b/configs/common_defconfig
+index 288e7fc..c4c01da 100644
+--- a/configs/common_defconfig
++++ b/configs/common_defconfig
+@@ -2,7 +2,7 @@
+ # HakiOS common defconfig: every setting there is, with what it does.
+ # Made by tools/hakios-config.py listing common -o <this file>; the values are the ones that file sets, and tests/CI check that it names every symbol.
+ #
+-# 345 symbols in 18 groups; 35 are set, 26 of them drivers built in.
++# 346 symbols in 18 groups; 36 are set, 27 of them drivers built in.
+ #
+ 
+ #
+@@ -19,7 +19,7 @@
+ CONFIG_FIRMWARE="device"
+ 
+ #
+-# Drivers built in (26)
++# Drivers built in (27)
+ #
+ 
+ # the audio DSP started and linked (adsp=1, adsp_step=N); the battery's state comes through it too. Needs the DSP's ... [hakios.adsp.c]
+@@ -97,7 +97,10 @@ CONFIG_HAKIOS_UFS=y
+ # a disk image of the host as /dev/rvblk0 (virtio_blk=1). QEMU only [hakios.virtio_blk.c]
+ CONFIG_HAKIOS_VIRTIO_BLK=y
+ 
+-# Wi-Fi of the WCN6750 (wifi=1, wifi_step=N): the DSP that runs the radio's firmware, Linux's ath11k (its object, made ... [hakios.wifi.c, hakios.wlfw.c, hakios.lx.c, hakios.sta.c, hakios.apple80211.c, hakios.wlan.cpp; requires CONFIG_HAKIOS_QMI]
++# what Wi-Fi is above the radio, whatever the chip: the host of Linux's driver object (ath11k's, made by ... [hakios.lx.c, hakios.sta.c, hakios.apple80211.c, hakios.wlan.cpp; requires CONFIG_HAKIOS_WIFI]
++CONFIG_HAKIOS_WIFI_STACK=y
++
++# Wi-Fi of the WCN6750 (wifi=1, wifi_step=N): the DSP that runs the radio's firmware and the firmware's exchange, ... [hakios.wifi.c, hakios.wlfw.c; requires CONFIG_HAKIOS_QMI, CONFIG_HAKIOS_WIFI_STACK]
+ CONFIG_HAKIOS_WIFI=y
+ 
+ #
+diff --git a/docs/drivers-config.md b/docs/drivers-config.md
+index c8a3516..fe6d125 100644
+--- a/docs/drivers-config.md
++++ b/docs/drivers-config.md
+@@ -58,7 +58,7 @@ The 25 drivers there are now, by subsystem:
+ | haptic | `HAPTIC` | |
+ | audio | `ADSP`, `SPEAKER`, `GUARD`, `SOUND` (requires ADSP, SPEAKER, GUARD), `MIC` (requires ADSP, SOUND), `VIRTIO_SOUND` | `hakios.audio.c` |
+ | power | `BATTERY`, `CPUFREQ`, `THERMAL`, `PMIC`, `BATTGUARD` | |
+-| wifi | `WIFI` (requires QMI) | |
++| wifi | `WIFI` (requires QMI, WIFI_STACK), `WIFI_STACK` (requires WIFI) | |
+ | bluetooth | `BT` | |
+ | modem | `QMI`, `MODEM` (requires QMI, UFS) | |
+ | net | `VIRTIO_NET` | `hakios.net.c` |
+@@ -119,7 +119,7 @@ component's `conf/Makefile` makes its configuration again when `MASTER.hakios` c
+ `-DHAKIOS_<NAME>` in the compiler's command line rather than as a file an object depends on, so when the choice changes,
+ `kernel` also removes the objects of the files that ask about it (`#ifdef HAKIOS_*`): they are built again.
+ 
+-Linux's `ath11k` object (`tools/mk-ath11k.sh`) is linked in only with `CONFIG_HAKIOS_WIFI` (`xnu-build.sh`): its calls are
++Linux's `ath11k` object (`tools/mk-ath11k.sh`, or the one a device names in `devices/<name>/lx.object`) is linked in only with `CONFIG_HAKIOS_WIFI_STACK` (`xnu-build.sh`): its calls are
+ answered by `hakios.lx.c`.
+ 
+ ## Leaving a driver out without breaking the others
+diff --git a/drivers/core/hakios.stubs.c b/drivers/core/hakios.stubs.c
+index 0a97ef5..0403f39 100644
+--- a/drivers/core/hakios.stubs.c
++++ b/drivers/core/hakios.stubs.c
+@@ -81,6 +81,9 @@ void hakios_adreno_minute(void) {}
+ void hakios_wifi_init(void) {}
+ void hakios_wifi_stop(void) {}
+ void hakios_wifi_quiesce(void) {}
++#endif
++
++#ifndef HAKIOS_WIFI_STACK
+ errno_t hakios_apple80211_ioctl(__unused u_long command, __unused void *data) { return EOPNOTSUPP; }
+ void HakiosWLANStart(__unused const char *interface, __unused const uint8_t *address) {}
+ #endif
+diff --git a/drivers/wifi/conf b/drivers/wifi/conf
+index 78c46e9..425036b 100644
+--- a/drivers/wifi/conf
++++ b/drivers/wifi/conf
+@@ -2,14 +2,20 @@
+ # CONFIG_HAKIOS_<NAME>=y in a defconfig builds a driver into the kernel; "standard" files are always built.
+ # tools/hakios-config.py reads this file; docs/drivers-config.md says what each word means and how it reaches XNU.
+ 
+-driver WIFI
+-	file    bsd/dev/hakios.wifi.c
+-	file    bsd/dev/hakios.wlfw.c
++driver WIFI_STACK
+ 	file    bsd/dev/hakios.lx.c
+ 	file    bsd/dev/hakios.sta.c
+ 	file    bsd/dev/hakios.apple80211.c
+ 	file    iokit/Kernel/hakios.wlan.cpp iokitcpp
+-	requires QMI
+-	help    Wi-Fi of the WCN6750 (wifi=1, wifi_step=N): the DSP that runs the radio's firmware, Linux's ath11k
+-	help    (its object, made by tools/mk-ath11k.sh, is linked in only with this), a station, and the Apple80211
+-	help    surface iOS's wifid talks to. Needs fw-wifi/ from the phone
++	requires WIFI
++	help    what Wi-Fi is above the radio, whatever the chip: the host of Linux's driver object (ath11k's, made by
++	help    tools/mk-ath11k.sh, or the one a device names in devices/<name>/lx.object; linked in only with this), the
++	help    station, and the Apple80211 surface iOS's wifid talks to. The radio's own driver (WIFI, or a SoC's in its
++	help    place) gives it the hakios_wifi_* calls
++
++driver WIFI
++	file    bsd/dev/hakios.wifi.c
++	file    bsd/dev/hakios.wlfw.c
++	requires QMI WIFI_STACK
++	help    Wi-Fi of the WCN6750 (wifi=1, wifi_step=N): the DSP that runs the radio's firmware and the firmware's
++	help    exchange, under Linux's ath11k (WIFI_STACK). Needs fw-wifi/ from the phone
+diff --git a/xnu-build.sh b/xnu-build.sh
+index 673a45f..740ccb1 100755
+--- a/xnu-build.sh
++++ b/xnu-build.sh
+@@ -1,12 +1,17 @@
+ #!/bin/bash
+-# Build XNU for redwood on Linux. Extra make args are passed through.
++# Build XNU on Linux. Extra make args are passed through.
+ source "$(dirname "${BASH_SOURCE[0]}")/xnu-env.sh"
+ cd "$XNU_SRC" || exit 1
+ # The Wi-Fi driver's object (tools/mk-ath11k.sh) is linked into the kernel when it is there; make
+ # does not see it change, so the linked kernel is thrown away when it has.
++# (ath11k's, or another the configured device names: devices/<name>/lx.object holds its path under xnu-deps/)
+ LX=$XNUDEPS/build/ath11k/out/ath11k.o
+-# ... only into a kernel that has the Wi-Fi driver (CONFIG_HAKIOS_WIFI): the object's calls are answered by hakios.lx.c
+-if [ -f config/MASTER.hakios ] && ! grep -q '^#  HAKIOS_DRIVERS = \[.* hakios_wifi ' config/MASTER.hakios; then LX=/nonexistent; fi
++DEVICE=${DEVICE:-$(sed -n 's/^CONFIG_DEVICE="\(.*\)"/\1/p' "$XNUDEPS/../.config" 2>/dev/null)}
++if [ -n "$DEVICE" ] && [ -f "$XNUDEPS/../devices/$DEVICE/lx.object" ]; then
++	LX=$XNUDEPS/$(head -1 "$XNUDEPS/../devices/$DEVICE/lx.object")
++fi
++# ... only into a kernel that has the Wi-Fi stack (CONFIG_HAKIOS_WIFI_STACK): the object's calls are answered by hakios.lx.c
++if [ -f config/MASTER.hakios ] && ! grep -q '^#  HAKIOS_DRIVERS = \[.* hakios_wifi_stack ' config/MASTER.hakios; then LX=/nonexistent; fi
+ STAMP=BUILD/obj/hakios-objects
+ mtime() { if [ "$XNU_HOST_OS" = Darwin ]; then stat -f %m "$1"; else stat -c %Y "$1"; fi; }
+ if [ -f "$LX" ]; then now="$LX $(mtime "$LX")"; else LX= now=; fi

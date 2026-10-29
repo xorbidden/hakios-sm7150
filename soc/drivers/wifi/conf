@@ -1,0 +1,10 @@
+# devices/davinci/soc/drivers/wifi/conf: the SM7150 family's Wi-Fi (docs/drivers-config.md).
+
+driver WIFI_SM7150
+	file    bsd/dev/hakios.wifi_sm7150.c
+	file    bsd/dev/hakios.wlfw10.c
+	replaces WIFI
+	requires QMI WIFI_STACK ADSP_SM7150 RPMH
+	help    the WCN3990's Wi-Fi under ath10k (wifi_ath10k=1, from soc/wifi/mk-ath10k.sh, named by lx.object): its firmware
+	help    on the modem (adsp_modem=1), the radio's SMMU context (wifi_smmu=2), iOS's station (wifi_station=1), in place
+	help    of the common WCN6750 bring-up. Never wifi=1 here (those are the WCN6750's steps)

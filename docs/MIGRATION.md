@@ -42,12 +42,19 @@ The rule for where a piece goes:
 | GPU: the Adreno 618 as the common Adreno driver's backend (`gpu=1`) | `soc/drivers/gpu/hakios.a618.c` + patch 0012 -- seen on the phone 2026-10-29 (21 steps, 610 MHz, Mesa draws) |
 | Audio: SM7150 DSP and its modem copy (`adsp=1 adsp_modem=1`), sound over MI2S (`sound=4`), mic on bolero 1.x (`mic=4`), TFA9874 speaker, battery (`battery=1`, common driver) | `soc/drivers/audio/` (`ADSP_SM7150`, `SOUND_SM7150`, `MIC_SM7150`, replacing the common ones), `drivers/audio/hakios.tfa9874.c` (`replaces SPEAKER`), patch 0013 (GUARD split out of SOUND) -- seen on the phone 2026-10-29: sound, microphone (Voice Memos), battery |
 | The phone's firmware in the images (TFA container, modem and Wi-Fi images, BT patch, sensors, camera tables) | `userland.sh` (`device_root`, `device_system`) + patch 0014 (userland/build.sh sources it) |
-| Vibration: the PM6150's vibrator LDO (`haptic=3`) | `drivers/haptic/hakios.vibrator.c`, `replaces HAPTIC` (built; not yet run) |
+| Vibration: the PM6150's vibrator LDO (`haptic=3`) | `drivers/haptic/hakios.vibrator.c`, `replaces HAPTIC` -- seen on the phone 2026-10-29 |
+| Wi-Fi's shared runtime: whole driver messages, station fixes for drivers without offload | patch 0017 (wifi/lx) |
+| Wi-Fi: the stack split from the WCN6750 bring-up; a device names its Linux driver object | patch 0018, `lx.object` |
+| Wi-Fi: the WCN3990 under ath10k (`wifi_ath10k=1 wifi_smmu=2 wifi_station=1`) | `soc/drivers/wifi/` (`WIFI_SM7150`: hakios.wifi_sm7150.c, hakios.wlfw10.c, `replaces WIFI`), `soc/wifi/` (ath10k's platform lx_snoc.c, include10/, mk-ath10k.sh) (built; not yet run) |
 | CPU clocks through the OSM (`cpufreq=1`) | `soc/drivers/power/hakios.cpufreq_osm.c`, `replaces CPUFREQ` -- seen on the phone 2026-10-29 |
 
 The SoC's audio drivers are copies of the common ones with the SM7150's changes woven through (memory map, APCS
 doorbell, MI2S, bolero 1.x, FastRPC): they do not take upstream's later fixes to drivers/audio/ by themselves. When
 upstream changes one of those files, compare and carry the fix over (`git log upstream/hakios -- drivers/audio/`).
+
+soc/drivers/wifi/hakios.wifi_sm7150.c is still the common WCN6750 driver with the WCN3990's parts made unconditional;
+its WCN6750 steps are never run here. To do: slim it down to the hakios_wifi_* calls the stack needs and the radio's
+SMMU context.
 
 Left out on purpose: the old bring-up diagnostics (XNU_DIAG_* in the loader and UEFI, gic_v3_timer_report), the
 install-to-flash mode of the metal release (flashboot.c, darwinfile.c, crypto.c: upstream dropped it), and the kernel's
@@ -57,7 +64,6 @@ own UFS driver's first steps (ufs_alone, ufs_hc_area: never usable). They stay i
 
 | # | Part | Old files | Goes to | Notes |
 |---|---|---|---|---|
-| 9 | Wi-Fi | hk_wlfw10.c, hk_wifi.c, hk_lx.c, hk_apple80211.c, hk_net.c changes, wifi/lx (include10, lx_snoc.c), tools/mk-ath10k.sh | `soc/drivers/wifi/` (`WIFI_ATH10K` `replaces WIFI`), its Linux glue under `soc/wifi/` | |
 | 11 | Cameras, flashlight | hk_cam_davinci.c, hk_camera.c, hk_torch.c changes | `drivers/camera/`: `CAM_DAVINCI` `replaces CAMERA`, the PM6150L torch | userland camera_device.c changes too |
 | 12 | Bluetooth | hk_bt.c (WCN3990, bt=5) | `soc/drivers/bluetooth/hakios.bt_wcn3990.c` `replaces BT` | then on with the to-do list: Bluetooth in iOS |
 | 13 | Userland bits | mkjobs.py, net_test.m, inject*.c (brightness), camera_device.c (the firmware staging is done: userland.sh) | patches, or the device's own image fragment if upstream has one | |

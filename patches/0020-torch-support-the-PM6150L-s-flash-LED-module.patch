@@ -1,0 +1,278 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: xorbidden <xorbidden@proton.me>
+Date: Thu, 29 Oct 2026 14:01:20 +0100
+Subject: [PATCH] torch: support the PM6150L's flash LED module
+
+The driver knew only the PM8350C's flash module (peripheral 0x2ee, one
+torch channel). The PM6150L's (0x5d3, the Mi 9T's) lights two channels
+at once and has other register offsets, safety-timer encoding, current
+resolution and fault bits (leds-qpnp-flash-v2.c of the sm6150 kernel).
+
+- Put the registers that differ into a struct layout, one per PMIC.
+- Pick the module with boot-arg pmic_flash= (default 0x2ee, as before);
+  the layout follows from it. Unknown ids are refused.
+- Write each channel's safety timer, target current and strobe for
+  every channel the torch lights.
+Upstream's recent safety fixes (dark() forcing its writes past the
+`broken' latch, `lit' set before the enabling writes) are kept.
+
+Not yet built in this layout; the logic ran on the Mi 9T in the old
+port (torch=3 from Control Center).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ drivers/camera/hakios.torch.c | 134 ++++++++++++++++++++++++++--------
+ 1 file changed, 103 insertions(+), 31 deletions(-)
+
+diff --git a/drivers/camera/hakios.torch.c b/drivers/camera/hakios.torch.c
+index b19f57a..7ed3a2f 100644
+--- a/drivers/camera/hakios.torch.c
++++ b/drivers/camera/hakios.torch.c
+@@ -1,8 +1,11 @@
+ /*
++ * Another PMIC's flash LED module is named by boot-arg pmic_flash=0xSPP (slave << 8 | peripheral): the PM6150L's
++ * (0x5d3, the Mi 9T's) has another register layout (struct layout below), chosen by that.
++ *
+  * The flashlight of the POCO X5 Pro (redwood): the flash LED module of the PM8350C (SPMI slave 2,
+  * registers 0xee00; "qcom,pm8350c-flash-led", four channels), the rear flash LED on its channel 0.
+  * Every address and number below belongs to this phone, from Android's own device tree, Xiaomi's
+- * driver for it (drivers/leds/leds-qti-flash.c of the phone's kernel, MiCode hakios-s-oss) and
++ * driver for it (drivers/leds/leds-qti-flash.c of the phone's kernel, MiCode redwood-s-oss) and
+  * what Android does when its own flashlight is switched on (its LED class devices read, nothing
+  * written by us):
+  *
+@@ -22,7 +25,7 @@
+  *
+  * What iOS's flashlight is on this machine: the loader says the camera has a flash (with torch=N,
+  * /product/camera "flash": MobileGestalt's camera-flash, Control Center's flashlight button), and
+- * libhakios.media.dylib in mediaserverd hands FigFlashlight, which finds no camera here, a device
++ * libhakios-media.dylib in mediaserverd hands FigFlashlight, which finds no camera here, a device
+  * of ours whose torch level is written to /dev/hakios-torch (userland/src/inject_media.c).
+  *
+  * Nothing here is done unless a boot-arg asks for it:
+@@ -278,33 +281,66 @@ spmi_read_once(const struct peripheral *p, uint8_t reg, uint8_t *bytes, uint32_t
+ #define FLASH_REVISION1         0x00
+ #define FLASH_TYPE              0x04            /* 0x18: a flash LED module */
+ #define FLASH_SUBTYPE           0x05            /* 0x07: four channels */
+-#define FLASH_STATUS1           0x06            /* a channel open or shorted */
+-#define FLASH_STATUS2           0x07
++#define FLASH_STATUS1           (L->status1)            /* a channel open or shorted */
++#define FLASH_STATUS2           (L->status2)
+ #define  STATUS2_OTST1          0x20            /* over-temperature, the first and the second threshold */
+ #define  STATUS2_OTST2          0x10
+ #define  STATUS2_VPH_LOW        0x01            /* the supply drooped */
+ #define FLASH_INT_RT_STS        0x10
+ #define  RT_STS_FAULT           0x01            /* open, short, or its supply not ready */
+-#define FLASH_SAFETY_TIMER0     0x3e            /* [7] on */
+-#define FLASH_ITARGET0          0x42            /* [6:0]: (code + 1) x the resolution */
++/*
++ * The module's registers that differ between the phones. Redwood: leds-qti-flash.c's (above). The PM6150L
++ * (the Mi 9T):'s flash LED module (SPMI slave 5, 0xd300; "qcom,qpnp-flash-led-v2", leds-qpnp-flash-v2.c of the sm6150
++ * kernel), whose torch is two channels at once (dt camera-flash@0: torch-source torch_0 and torch_1, switch_2,
++ * led-mask 3), each its own SAFETY_TMR (0x40 + n; 0x13 = off), TGR_CURRENT (0x43 + n; [6:0] code) and STROBE_CTRL
++ * (0x49 + n; [2] hardware strobe), one IRES (0x47: two bits a channel, 0 = 12.5 mA), MOD_CTRL 0x46 [7] and
++ * EN_LED_CTRL 0x4c (a bit a channel); STATUS1 0x08 (open or shorted LEDs), STATUS2 0x09 ([4] the supply drooped),
++ * INT_RT_STS 0x10 ([0] the fault). The device tree's torch current is 300 mA a channel at most; 150 here.
++ */
++struct layout {
++	uint8_t safety0, itarget0, iresolution, strobe0, en_led, status1, status2, type, subtype;
++	uint8_t channels;               /* the channels the torch lights, a bit each */
++	uint8_t safety_off, safety_mask, iresolution_mask, status2_bad;
++	uint32_t torch_ma;
++	uint8_t itarget_max;
++};
++static const struct layout pm8350c_layout = {
++	0x3e, 0x42, 0x49, 0x4a, 0x4e, 0x06, 0x07, 0x18, 0x07, 0x01, 0x00, 0x80, 0x01, 0x20 | 0x10 | 0x01, 125, 9,
++};
++static const struct layout pm6150l_layout = {
++	0x40, 0x43, 0x47, 0x49, 0x4c, 0x08, 0x09, 0x18, 0x00, 0x03, 0x13, 0xff, 0x0f, 0x10, 150, 11,
++};
++static const struct layout *L = &pm8350c_layout;
++static uint16_t flash_id = 0x2ee;                /* the flash module's peripheral (pmic_flash=): the layout follows it */
++
++#define FLASH_SAFETY_TIMER0     (L->safety0)
++#define FLASH_ITARGET0          (L->itarget0)            /* [6:0]: (code + 1) x the resolution */
+ #define FLASH_MODULE_EN         0x46            /* [7] */
+-#define FLASH_IRESOLUTION       0x49            /* a bit per channel: 0 12.5 mA, 1 5 mA */
+-#define FLASH_STROBE_CTRL0      0x4a            /* [6:4] hardware strobe's kind, [2] hardware strobe */
+-#define FLASH_EN_LED_CTRL       0x4e            /* a bit per channel */
++#define FLASH_IRESOLUTION       (L->iresolution)
++#define FLASH_STROBE_CTRL0      (L->strobe0)
++#define FLASH_EN_LED_CTRL       (L->en_led)
+ #define FLASH_OTST2_CFG1        0x78
+ #define FLASH_OTST1_CFG1        0x7a
+ 
+ #define ALARM_SUBTYPE           0x05            /* 0x08: the first generation, 0x09 the second */
+ #define ALARM_STATUS            0x08            /* the over-temperature stage: [1:0] (first generation) or [6:4] */
+ 
+-#define ANDROID_TORCH_MA        125             /* led:torch_0 while Android's flashlight is on */
++#define ANDROID_TORCH_MA        (L->torch_ma)   /* redwood: led:torch_0 while Android's flashlight is on */
+ #define IRES_UA                 12500           /* its resolution ("qcom,ires-ua") */
+-#define ANDROID_ITARGET         9               /* round(125000 / 12500) - 1: the most ever written */
++#define ANDROID_ITARGET         (L->itarget_max) /* round(torch_ma / 12.5) - 1: the most ever written */
+ #define HOTTEST_BATTERY_C       45
+ 
+-static const uint8_t writable_regs[] = {
+-	FLASH_SAFETY_TIMER0, FLASH_ITARGET0, FLASH_MODULE_EN, FLASH_IRESOLUTION, FLASH_STROBE_CTRL0, FLASH_EN_LED_CTRL,
+-};
++/* the registers that may be written: a channel's own ones for every channel the torch lights */
++static bool
++writable(uint8_t reg)
++{
++	for (uint8_t n = 0; n < 8; n++) {
++		if ((L->channels >> n & 1) && (reg == FLASH_SAFETY_TIMER0 + n || reg == FLASH_ITARGET0 + n || reg == FLASH_STROBE_CTRL0 + n)) {
++			return true;
++		}
++	}
++	return reg == FLASH_MODULE_EN || reg == FLASH_IRESOLUTION || reg == FLASH_EN_LED_CTRL;
++}
+ 
+ static void
+ give_up(const char *why)
+@@ -324,13 +360,10 @@ put(uint8_t reg, uint8_t value)
+ {
+ 	const char *problem;
+ 	uint8_t back = 0xff;
+-	bool allowed = false;
++	bool allowed = writable(reg);
+ 
+-	for (size_t i = 0; i < sizeof(writable_regs); i++) {
+-		allowed |= writable_regs[i] == reg;
+-	}
+ 	/* (the latch does not stop dark(): after a failed write the final "off" would otherwise do nothing and the LED stay on) */
+-	if ((broken && !forcing) || !allowed || !flash.writable || flash.write == 0 || flash.id != 0x2ee) {
++	if ((broken && !forcing) || !allowed || !flash.writable || flash.write == 0 || flash.id != flash_id) {
+ 		give_up(allowed ? "a write that may not be made" : "a register that is not to be written");
+ 		return false;
+ 	}
+@@ -444,7 +477,7 @@ trouble(void)
+ 		return "a read of the flags that failed";
+ 	}
+ 	stage = alarm_subtype == 0x08 ? alarm_status & 0x03 : (alarm_status >> 4) & 0x07;
+-	if ((rt & RT_STS_FAULT) || status1 != 0 || (status2 & (STATUS2_OTST1 | STATUS2_OTST2 | STATUS2_VPH_LOW)) || stage != 0) {
++	if ((rt & RT_STS_FAULT) || status1 != 0 || (status2 & L->status2_bad) || stage != 0) {
+ 		uint8_t more[8] = { 0 }, latched[2] = { 0 };
+ 
+ 		(void)spmi_read(&flash, 0x06, more, 8);
+@@ -463,16 +496,34 @@ trouble(void)
+ 
+ static bool configured, lit;
+ 
+-/* Android's probe, once: channel 0 strobed by software, its safety timer off. */
++/* Android's probe, once: the torch's channels strobed by software, their safety timers off. */
+ static bool
+ configure(void)
+ {
+-	if (!configured && put_bits(FLASH_STROBE_CTRL0, 0x74, 0x00) && put_bits(FLASH_SAFETY_TIMER0, 0x80, 0x00)) {
+-		configured = true;
++	bool ok = true;
++
++	for (uint8_t n = 0; ok && !configured && n < 8; n++) {
++		if (L->channels >> n & 1) {
++			ok = put_bits((uint8_t)(FLASH_STROBE_CTRL0 + n), L == &pm6150l_layout ? 0x04 : 0x74, 0x00) &&
++			    put_bits((uint8_t)(FLASH_SAFETY_TIMER0 + n), L->safety_mask, L->safety_off);
++		}
+ 	}
++	configured = configured || ok;
+ 	return configured;
+ }
+ 
++/* every channel of the torch's target current */
++static bool
++itargets(uint8_t code)
++{
++	for (uint8_t n = 0; n < 8; n++) {
++		if ((L->channels >> n & 1) && !put_bits((uint8_t)(FLASH_ITARGET0 + n), 0x7f, code)) {
++			return false;
++		}
++	}
++	return true;
++}
++
+ /* The light at `permille' of Android's current: its writes in its order. */
+ static bool
+ light(uint32_t permille)
+@@ -492,13 +543,13 @@ light(uint32_t permille)
+ 		give_up("trouble before the light");
+ 		return false;
+ 	}
+-	if (!configure() || !put_bits(FLASH_IRESOLUTION, 0x01, 0x00) || !put_bits(FLASH_ITARGET0, 0x7f, (uint8_t)code)) {
++	if (!configure() || !put_bits(FLASH_IRESOLUTION, L->iresolution_mask, 0x00) || !itargets((uint8_t)code)) {
+ 		return false;
+ 	}
+ 	if (!lit) {
+ 		/* lit is set before the enabling writes: one that lands but fails its read-back must still get a dark() later */
+ 		lit = true;
+-		if (!put(FLASH_MODULE_EN, 0x80) || !put_bits(FLASH_EN_LED_CTRL, 0x01, 0x01)) {
++		if (!put(FLASH_MODULE_EN, 0x80) || !put_bits(FLASH_EN_LED_CTRL, L->channels, L->channels)) {
+ 			return false;
+ 		}
+ 	}
+@@ -513,10 +564,14 @@ dark(void)
+ 
+ 	/* every step is tried even if an earlier one failed, and none is stopped by `broken': a half-done "off" leaves the LED on */
+ 	forcing = true;
+-	ok = put_bits(FLASH_EN_LED_CTRL, 0x01, 0x00);
++	ok = put_bits(FLASH_EN_LED_CTRL, L->channels, 0x00);
+ 	ok = put(FLASH_MODULE_EN, 0x00) && ok;
+-	ok = put_bits(FLASH_ITARGET0, 0x7f, 0x00) && ok;
+-	ok = put_bits(FLASH_SAFETY_TIMER0, 0x80, 0x00) && ok;
++	ok = itargets(0x00) && ok;
++	for (uint8_t n = 0; n < 8; n++) {
++		if (L->channels >> n & 1) {
++			ok = put_bits((uint8_t)(FLASH_SAFETY_TIMER0 + n), L->safety_mask, L->safety_off) && ok;
++		}
++	}
+ 	forcing = false;
+ 	lit = !ok && lit;
+ 	return ok;
+@@ -656,6 +711,21 @@ torch_thread(__unused void *parameter, __unused wait_result_t result)
+ 	uint32_t version, channels;
+ 	uint8_t id[2] = { 0, 0 }, revision = 0, alarm_status = 0;
+ 
++	{
++		uint32_t id = 0;
++
++		if (PE_parse_boot_argn("pmic_flash", &id, sizeof(id)) && id == 0x5d3) {
++			L = &pm6150l_layout;
++			flash_id = 0x5d3;
++			flash.name = "the PM6150L's flash LED module";
++			flash.id = 0x5d3;
++			alarm.name = "the PM6150L's temperature alarm";
++			alarm.id = 0x424;
++		} else if (id != 0 && id != 0x2ee) {
++			say("torch: pmic_flash=%#x is no flash module this driver knows (0x2ee the PM8350C's, 0x5d3 the PM6150L's)\n", id);
++			thread_terminate(current_thread());
++		}
++	}
+ 	say("torch: level %u: %s\n", level, level == 1 ? "a look, reading only" : level == 2 ? "the light on once" :
+ 	    "the light for iOS");
+ 	arb_core = ml_io_map(ARB_CORE_PHYS, ARB_CORE_SIZE);
+@@ -676,8 +746,10 @@ torch_thread(__unused void *parameter, __unused wait_result_t result)
+ 		say("torch: the flash module cannot be read\n");
+ 		goto out;
+ 	}
++	bool expected = id[0] == L->type && (L->subtype == 0 || id[1] == L->subtype);       /* (davinci: any subtype of a flash module) */
++
+ 	say("torch: the module says type %#x, subtype %#x, revision %#x%s\n", id[0], id[1], revision,
+-	    id[0] == 0x18 && id[1] == 0x07 ? ": a flash LED module of four channels, as Android's driver expects" : ": NOT WHAT WAS EXPECTED");
++	    expected ? ": a flash LED module, as Android's driver expects" : ": NOT WHAT WAS EXPECTED");
+ 	show_registers();
+ 	if (alarm.found && get(&alarm, ALARM_SUBTYPE, &alarm_subtype) && get(&alarm, ALARM_STATUS, &alarm_status)) {
+ 		uint8_t stage = alarm_subtype == 0x08 ? alarm_status & 0x03 : (alarm_status >> 4) & 0x07;
+@@ -687,7 +759,7 @@ torch_thread(__unused void *parameter, __unused wait_result_t result)
+ 	} else {
+ 		alarm.found = false;
+ 	}
+-	if (id[0] != 0x18 || id[1] != 0x07 || level < 2) {
++	if (!expected || level < 2) {
+ 		goto out;
+ 	}
+ 	if (!flash.writable) {
+@@ -774,5 +846,5 @@ hakios_torch_quiesce(void)
+ 	(void)spmi_read(&flash, FLASH_EN_LED_CTRL, &channels, 1);
+ 	(void)spmi_read(&flash, FLASH_ITARGET0, &target, 1);
+ 	say("torch: at the run's end the module reads: enable %#04x, channels %#04x, target %#04x%s\n", module, channels, target,
+-	    module == 0 && (channels & 0x01) == 0 && target == 0 ? " (dark)" : " (NOT DARK)");
++	    module == 0 && (channels & L->channels) == 0 && target == 0 ? " (dark)" : " (NOT DARK)");
+ }

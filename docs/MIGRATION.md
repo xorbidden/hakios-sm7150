@@ -45,7 +45,9 @@ The rule for where a piece goes:
 | Vibration: the PM6150's vibrator LDO (`haptic=3`) | `drivers/haptic/hakios.vibrator.c`, `replaces HAPTIC` -- seen on the phone 2026-10-29 |
 | Wi-Fi's shared runtime: whole driver messages, station fixes for drivers without offload | patch 0017 (wifi/lx) |
 | Wi-Fi: the stack split from the WCN6750 bring-up; a device names its Linux driver object | patch 0018, `lx.object` |
-| Wi-Fi: the WCN3990 under ath10k (`wifi_ath10k=1 wifi_smmu=2 wifi_station=1`) | `soc/drivers/wifi/` (`WIFI_SM7150`: hakios.wifi_sm7150.c, hakios.wlfw10.c, `replaces WIFI`), `soc/wifi/` (ath10k's platform lx_snoc.c, include10/, mk-ath10k.sh) (built; not yet run) |
+| Wi-Fi: the WCN3990 under ath10k (`wifi_ath10k=1 wifi_smmu=2 wifi_station=1`) | `soc/drivers/wifi/` (`WIFI_SM7150`: hakios.wifi_sm7150.c, hakios.wlfw10.c, `replaces WIFI`), `soc/wifi/` (ath10k's platform lx_snoc.c, include10/, mk-ath10k.sh), patch 0019 (fw/network for any radio) -- seen on the phone 2026-10-29 |
+| Flashlight: the PM6150L's flash module (`pmic_flash=0x5d3`) | patch 0020 (common torch driver: a layout per PMIC) (not yet built) |
+| Cameras: the Mi 9T's IMX582 and pop-up S5K3T2 | `drivers/camera/hakios.cam_davinci.c` (ported; not yet in a conf, not built) |
 | CPU clocks through the OSM (`cpufreq=1`) | `soc/drivers/power/hakios.cpufreq_osm.c`, `replaces CPUFREQ` -- seen on the phone 2026-10-29 |
 
 The SoC's audio drivers are copies of the common ones with the SM7150's changes woven through (memory map, APCS

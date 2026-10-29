@@ -1,0 +1,24 @@
+# devices/davinci/soc/drivers/audio/conf: the SM7150 family's audio DSP (docs/drivers-config.md).
+
+driver ADSP_SM7150
+	file    bsd/dev/hakios.adsp_sm7150.c
+	file    bsd/dev/hakios.adsp_sm7150_modem.c
+	replaces ADSP
+	requires QMI
+	help    the SM7150's audio DSP (adsp=1: FastRPC's root PD, then the sensors' process) and, from a second copy of the
+	help    same file, its modem (adsp_modem=1, for the Wi-Fi's firmware), in place of the common ADSP driver; its
+	help    addresses are the SM7150's (soc_smem, soc_cmd_db, soc_adsp_mem, soc_apcs_ipc override them). Needs fw-audio/
+
+driver SOUND_SM7150
+	file    bsd/dev/hakios.sound_sm7150.c
+	replaces SOUND
+	requires ADSP_SM7150 SPEAKER GUARD
+	help    the speaker playing on the SM7150 (sound=N): the primary MI2S interface (AFE port 0x1000) instead of TDM,
+	help    the SM7150's audio SMMU stream, through the speakers' guard, in place of the common SOUND driver
+
+driver MIC_SM7150
+	file    bsd/dev/hakios.mic_sm7150.c
+	replaces MIC
+	requires ADSP_SM7150 SOUND_SM7150
+	help    the microphones on the SM7150's codec (bolero 1.x TX/VA macros, SoundWire 1.5, WCD937x; mic=N), in place
+	help    of the common MIC driver

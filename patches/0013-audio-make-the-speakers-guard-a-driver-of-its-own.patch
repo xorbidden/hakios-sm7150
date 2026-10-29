@@ -1,0 +1,102 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: xorbidden <xorbidden@proton.me>
+Date: Thu, 29 Oct 2026 13:20:32 +0100
+Subject: [PATCH] audio: make the speakers' guard a driver of its own
+
+hakios.guard.c was built as part of SOUND. A SoC whose sound path
+differs replaces SOUND with a driver of its own, but still needs the
+guard, and a SoC or device conf may not name a common file. Give the
+guard its own GUARD symbol; SOUND now requires it.
+
+No change for existing configurations: GUARD defaults to y, and
+common_defconfig is regenerated with it.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ configs/common_defconfig |  9 ++++++---
+ docs/drivers-config.md   |  5 ++---
+ drivers/audio/conf       | 12 ++++++++----
+ 3 files changed, 16 insertions(+), 10 deletions(-)
+
+diff --git a/configs/common_defconfig b/configs/common_defconfig
+index 17d9bdd..288e7fc 100644
+--- a/configs/common_defconfig
++++ b/configs/common_defconfig
+@@ -2,7 +2,7 @@
+ # HakiOS common defconfig: every setting there is, with what it does.
+ # Made by tools/hakios-config.py listing common -o <this file>; the values are the ones that file sets, and tests/CI check that it names every symbol.
+ #
+-# 344 symbols in 18 groups; 34 are set, 25 of them drivers built in.
++# 345 symbols in 18 groups; 35 are set, 26 of them drivers built in.
+ #
+ 
+ #
+@@ -19,7 +19,7 @@
+ CONFIG_FIRMWARE="device"
+ 
+ #
+-# Drivers built in (25)
++# Drivers built in (26)
+ #
+ 
+ # the audio DSP started and linked (adsp=1, adsp_step=N); the battery's state comes through it too. Needs the DSP's ... [hakios.adsp.c]
+@@ -28,7 +28,10 @@ CONFIG_HAKIOS_ADSP=y
+ # the two speaker amplifiers on I2C, and their watch of temperature and battery [hakios.speaker.c]
+ CONFIG_HAKIOS_SPEAKER=y
+ 
+-# the speakers playing (sound=N): what the DSP's services are told, the feeder, and the speakers' guard that limits ... [hakios.sound.c, hakios.guard.c; requires CONFIG_HAKIOS_ADSP, CONFIG_HAKIOS_SPEAKER]
++# the speakers' guard: what the samples go through on their way to the amplifiers, for want of the DSP's speaker ... [hakios.guard.c]
++CONFIG_HAKIOS_GUARD=y
++
++# the speakers playing (sound=N): what the DSP's services are told, and the feeder, through the speakers' guard ... [hakios.sound.c; requires CONFIG_HAKIOS_ADSP, CONFIG_HAKIOS_SPEAKER, CONFIG_HAKIOS_GUARD]
+ CONFIG_HAKIOS_SOUND=y
+ 
+ # the microphones, through the audio DSP (mic=N) [hakios.mic.c; requires CONFIG_HAKIOS_ADSP, CONFIG_HAKIOS_SOUND]
+diff --git a/docs/drivers-config.md b/docs/drivers-config.md
+index 3d665a5..c8a3516 100644
+--- a/docs/drivers-config.md
++++ b/docs/drivers-config.md
+@@ -29,8 +29,7 @@ driver GOODIX
+ 
+ driver SOUND
+ 	file    bsd/dev/hakios.sound.c
+-	file    bsd/dev/hakios.guard.c
+-	requires ADSP SPEAKER
++	requires ADSP SPEAKER GUARD
+ 	help    the speakers playing (sound=N) ...
+ ```
+ 
+@@ -57,7 +56,7 @@ The 25 drivers there are now, by subsystem:
+ | gpu | `ADRENO` | |
+ | camera | `CAMERA`, `TORCH` | |
+ | haptic | `HAPTIC` | |
+-| audio | `ADSP`, `SPEAKER`, `SOUND` (requires ADSP, SPEAKER), `MIC` (requires ADSP, SOUND), `VIRTIO_SOUND` | `hakios.audio.c` |
++| audio | `ADSP`, `SPEAKER`, `GUARD`, `SOUND` (requires ADSP, SPEAKER, GUARD), `MIC` (requires ADSP, SOUND), `VIRTIO_SOUND` | `hakios.audio.c` |
+ | power | `BATTERY`, `CPUFREQ`, `THERMAL`, `PMIC`, `BATTGUARD` | |
+ | wifi | `WIFI` (requires QMI) | |
+ | bluetooth | `BT` | |
+diff --git a/drivers/audio/conf b/drivers/audio/conf
+index a62e9eb..e51385c 100644
+--- a/drivers/audio/conf
++++ b/drivers/audio/conf
+@@ -15,12 +15,16 @@ driver SPEAKER
+ 	file    bsd/dev/hakios.speaker.c
+ 	help    the two speaker amplifiers on I2C, and their watch of temperature and battery
+ 
++driver GUARD
++	file    bsd/dev/hakios.guard.c
++	help    the speakers' guard: what the samples go through on their way to the amplifiers, for want of the DSP's
++	help    speaker protection (sys/hakios.audio.h, hakios_guard_*); used by whichever sound driver is built
++
+ driver SOUND
+ 	file    bsd/dev/hakios.sound.c
+-	file    bsd/dev/hakios.guard.c
+-	requires ADSP SPEAKER
+-	help    the speakers playing (sound=N): what the DSP's services are told, the feeder, and the speakers' guard
+-	help    that limits what the amplifiers get
++	requires ADSP SPEAKER GUARD
++	help    the speakers playing (sound=N): what the DSP's services are told, and the feeder, through the speakers'
++	help    guard (GUARD) that limits what the amplifiers get
+ 
+ driver MIC
+ 	file    bsd/dev/hakios.mic.c

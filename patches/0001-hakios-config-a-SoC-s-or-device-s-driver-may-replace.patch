@@ -15,8 +15,8 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
  docs/drivers-config.md      |  3 +-
  drivers/core/hakios.stubs.c |  1 +
  tools/hakios-config-test.py |  5 ++-
- tools/hakios-config.py      | 81 ++++++++++++++++++++++++++++++++-----
- 4 files changed, 76 insertions(+), 14 deletions(-)
+ tools/hakios-config.py      | 84 ++++++++++++++++++++++++++++++++-----
+ 4 files changed, 79 insertions(+), 14 deletions(-)
 
 diff --git a/docs/drivers-config.md b/docs/drivers-config.md
 index 9498751..3d665a5 100644
@@ -63,7 +63,7 @@ index 159cea7..b428900 100755
      problems, _ = hc.check(dict(off, HAKIOS_ADSP="n"))
      check("a driver without one it requires is refused (SOUND without ADSP)", any("CONFIG_HAKIOS_SOUND requires CONFIG_HAKIOS_ADSP" in p for p in problems), problems)
 diff --git a/tools/hakios-config.py b/tools/hakios-config.py
-index 68decaa..a736a48 100755
+index 68decaa..b419072 100755
 --- a/tools/hakios-config.py
 +++ b/tools/hakios-config.py
 @@ -198,6 +198,7 @@ class Driver:
@@ -111,7 +111,7 @@ index 68decaa..a736a48 100755
      return drivers, [tuple(s) for s in standard]
  
  
-@@ -408,12 +419,37 @@ def split_args(text):
+@@ -408,12 +419,40 @@ def split_args(text):
      return words
  
  
@@ -133,7 +133,10 @@ index 68decaa..a736a48 100755
 +                text = open(d.source(path), encoding="utf-8", errors="replace").read()
 +            except OSError:
 +                continue
-+            for pattern in (module.KERNEL, module.TUNABLE):
++            patterns = [module.KERNEL, module.TUNABLE, module.WRAPPED]
++            if module.OPTION_DEF.search(text):  # a file with its own option(name): its callers name arguments
++                patterns.append(module.OPTION_CALL)
++            for pattern in patterns:
 +                for m in pattern.finditer(text):
 +                    found[m.group(1)].add(os.path.basename(path))
 +    return found
@@ -151,7 +154,7 @@ index 68decaa..a736a48 100755
  
  
  def config_dir(root):
-@@ -571,12 +607,19 @@ def check_drivers(config, parsed):
+@@ -571,12 +610,19 @@ def check_drivers(config, parsed):
      if DRIVERS_ERROR:
          return [DRIVERS_ERROR]
      built = drivers_built(config)
@@ -173,7 +176,7 @@ index 68decaa..a736a48 100755
      if not left_out:
          return problems
      readers = arg_readers()
-@@ -606,8 +649,12 @@ def arg_readers():
+@@ -606,8 +652,12 @@ def arg_readers():
              module = importlib.util.module_from_spec(spec)
              spec.loader.exec_module(module)
              found = module.scan(ROOT)
@@ -188,7 +191,7 @@ index 68decaa..a736a48 100755
          except (OSError, subprocess.CalledProcessError, AttributeError):
              _READERS.append(None)
      return _READERS[0]
-@@ -782,14 +829,16 @@ def listing(config, title_lines):
+@@ -782,14 +832,16 @@ def listing(config, title_lines):
      (or `# CONFIG_X is not set`) under it. Linux's defconfigs list only what differs from the defaults; this one lists everything,
      because here a symbol's default is "the kernel decides" and a reader should see every setting there is."""
      by_group = collections.defaultdict(list)
@@ -207,7 +210,7 @@ index 68decaa..a736a48 100755
      for group in GROUP_ORDER + sorted(g for g in by_group if g not in GROUP_ORDER):
          syms = by_group.get(group)
          if not syms:
-@@ -840,7 +889,9 @@ def cmd_complete(a):
+@@ -840,7 +892,9 @@ def cmd_complete(a):
          m = re.match(r"(?:# )?CONFIG_([A-Z0-9_]+)(?:=| is not set)", line.strip())
          if m:
              named.add(m.group(1))
@@ -218,7 +221,7 @@ index 68decaa..a736a48 100755
      for name in missing[:30]:
          print("hakios-config: %s does not name CONFIG_%s" % (rel(a.root, path), name))
      if len(missing) > 30:
-@@ -929,9 +980,17 @@ def master_hakios(built, sources):
+@@ -929,9 +983,17 @@ def master_hakios(built, sources):
      return "\n".join(lines) + "\n"
  
  

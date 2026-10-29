@@ -1,0 +1,7 @@
+# devices/davinci/drivers/audio/conf: the Mi 9T's speaker (docs/drivers-config.md).
+
+driver TFA9874
+	file    bsd/dev/hakios.tfa9874.c
+	replaces SPEAKER
+	help    the Mi 9T's speaker amplifier, an NXP TFA9874 on I2C fed by the primary MI2S interface, in place of the
+	help    common Awinic driver; set up from the phone's own container (fw-audio/mono.cnt) when the sound starts

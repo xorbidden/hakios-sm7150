@@ -1,0 +1,6 @@
+# devices/davinci/soc/drivers/core/conf: what the SM7150 family's drivers share (docs/drivers-config.md).
+
+driver RPMH
+	file    bsd/dev/hakios.rpmh.c
+	help    RPMh for the SM7150's drivers: an LDO on, a bus vote, a resource by its name in the command database
+	help    (no boot-argument of its own: its callers' start it)

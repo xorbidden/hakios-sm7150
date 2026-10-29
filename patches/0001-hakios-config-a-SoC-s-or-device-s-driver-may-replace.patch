@@ -12,11 +12,11 @@ both is refused, naming both. Only a SoC's or device's conf may say it.
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 ---
- docs/drivers-config.md      |  3 ++-
+ docs/drivers-config.md      |  3 +-
  drivers/core/hakios.stubs.c |  1 +
- tools/hakios-config-test.py |  5 +++--
- tools/hakios-config.py      | 44 +++++++++++++++++++++++++++++++------
- 4 files changed, 43 insertions(+), 10 deletions(-)
+ tools/hakios-config-test.py |  5 ++-
+ tools/hakios-config.py      | 81 ++++++++++++++++++++++++++++++++-----
+ 4 files changed, 76 insertions(+), 14 deletions(-)
 
 diff --git a/docs/drivers-config.md b/docs/drivers-config.md
 index 9498751..3d665a5 100644
@@ -63,7 +63,7 @@ index 159cea7..b428900 100755
      problems, _ = hc.check(dict(off, HAKIOS_ADSP="n"))
      check("a driver without one it requires is refused (SOUND without ADSP)", any("CONFIG_HAKIOS_SOUND requires CONFIG_HAKIOS_ADSP" in p for p in problems), problems)
 diff --git a/tools/hakios-config.py b/tools/hakios-config.py
-index 68decaa..0d74d44 100755
+index 68decaa..a736a48 100755
 --- a/tools/hakios-config.py
 +++ b/tools/hakios-config.py
 @@ -198,6 +198,7 @@ class Driver:
@@ -111,7 +111,47 @@ index 68decaa..0d74d44 100755
      return drivers, [tuple(s) for s in standard]
  
  
-@@ -571,12 +582,19 @@ def check_drivers(config, parsed):
+@@ -408,12 +419,37 @@ def split_args(text):
+     return words
+ 
+ 
++def external_arg_readers():
++    """{argument: {file names}} read by the drivers of the SoC and device repositories checked out, which the common
++    repository's catalogue (configs/boot-args.lst, docs/boot-args.md) does not list: they are those repositories' own."""
++    try:
++        spec = importlib.util.spec_from_file_location("boot_args", os.path.join(HERE, "boot-args.py"))
++        module = importlib.util.module_from_spec(spec)
++        spec.loader.exec_module(module)
++    except (OSError, AttributeError):
++        return {}
++    found = collections.defaultdict(set)
++    for d in DRIVERS:
++        if d.origin is None:
++            continue
++        for path, _tags in d.files:
++            try:
++                text = open(d.source(path), encoding="utf-8", errors="replace").read()
++            except OSError:
++                continue
++            for pattern in (module.KERNEL, module.TUNABLE):
++                for m in pattern.finditer(text):
++                    found[m.group(1)].add(os.path.basename(path))
++    return found
++
++
+ def known_args(root=None):
+-    """The names the source reads, from configs/boot-args.lst (tools/boot-args.py --lst makes it); None if there is no list."""
++    """The names the source reads, from configs/boot-args.lst (tools/boot-args.py --lst makes it), and those the SoC's and
++    device's own drivers read; None if there is no list."""
+     path = os.path.join(root or os.path.dirname(HERE), "configs", "boot-args.lst")
+     if not os.path.isfile(path):
+         return None
+-    return {line.split("\t")[0].strip() for line in open(path, encoding="utf-8") if line.strip()}
++    return {line.split("\t")[0].strip() for line in open(path, encoding="utf-8") if line.strip()} | set(external_arg_readers())
+ 
+ 
+ def config_dir(root):
+@@ -571,12 +607,19 @@ def check_drivers(config, parsed):
      if DRIVERS_ERROR:
          return [DRIVERS_ERROR]
      built = drivers_built(config)
@@ -133,7 +173,22 @@ index 68decaa..0d74d44 100755
      if not left_out:
          return problems
      readers = arg_readers()
-@@ -782,14 +800,16 @@ def listing(config, title_lines):
+@@ -606,8 +649,12 @@ def arg_readers():
+             module = importlib.util.module_from_spec(spec)
+             spec.loader.exec_module(module)
+             found = module.scan(ROOT)
+-            _READERS.append({arg: set(where["kernel"]) for arg, where in found.items()
+-                             if where["kernel"] and not where["loader"] and not where["user"]})
++            readers = {arg: set(where["kernel"]) for arg, where in found.items()
++                       if where["kernel"] and not where["loader"] and not where["user"]}
++            for arg, files in external_arg_readers().items():
++                if arg not in found or arg in readers:
++                    readers.setdefault(arg, set()).update(files)
++            _READERS.append(readers)
+         except (OSError, subprocess.CalledProcessError, AttributeError):
+             _READERS.append(None)
+     return _READERS[0]
+@@ -782,14 +829,16 @@ def listing(config, title_lines):
      (or `# CONFIG_X is not set`) under it. Linux's defconfigs list only what differs from the defaults; this one lists everything,
      because here a symbol's default is "the kernel decides" and a reader should see every setting there is."""
      by_group = collections.defaultdict(list)
@@ -152,7 +207,7 @@ index 68decaa..0d74d44 100755
      for group in GROUP_ORDER + sorted(g for g in by_group if g not in GROUP_ORDER):
          syms = by_group.get(group)
          if not syms:
-@@ -840,7 +860,9 @@ def cmd_complete(a):
+@@ -840,7 +889,9 @@ def cmd_complete(a):
          m = re.match(r"(?:# )?CONFIG_([A-Z0-9_]+)(?:=| is not set)", line.strip())
          if m:
              named.add(m.group(1))
@@ -163,7 +218,7 @@ index 68decaa..0d74d44 100755
      for name in missing[:30]:
          print("hakios-config: %s does not name CONFIG_%s" % (rel(a.root, path), name))
      if len(missing) > 30:
-@@ -929,9 +951,17 @@ def master_hakios(built, sources):
+@@ -929,9 +980,17 @@ def master_hakios(built, sources):
      return "\n".join(lines) + "\n"
  
  

@@ -1,0 +1,7 @@
+# devices/davinci/drivers/gpu/conf: the Mi 9T's display (docs/drivers-config.md).
+
+driver DSI
+	file    bsd/dev/hakios.dsi.c
+	requires RPMH
+	help    the Mi 9T's panel (Samsung AMS639RQ08, command mode on DSI 0) brought up by the kernel and fed from
+	help    two framebuffers (panel_on=1; panel_probe=1: a look only)

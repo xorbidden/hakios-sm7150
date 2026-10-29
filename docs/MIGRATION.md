@@ -31,6 +31,8 @@ The rule for where a piece goes:
 | Device drivers register their quiesce/stop on the way back | patch 0006 (loader_return.c) |
 | The kernel's log mirrored to the loader from kprintf's start | patch 0007 |
 | Kernel builds on Ubuntu (mawk, python3 only) | patches 0008, 0009 |
+| RPMh helpers for the SoC's drivers (LDOs, bus votes) on upstream's hakios_rsc_lock | `soc/drivers/core/hakios.rpmh.c` (built) |
+| The panel (DSI command mode) with two framebuffers, via the panel interface and return hooks | `drivers/gpu/hakios.dsi.c` (built; not yet run) |
 | CPU clocks through the OSM (`cpufreq=1`) | `soc/drivers/power/hakios.cpufreq_osm.c`, `replaces CPUFREQ` (built; not yet run) |
 
 Left out on purpose: the old bring-up diagnostics (XNU_DIAG_* in the loader and UEFI, gic_v3_timer_report), the
@@ -41,7 +43,6 @@ own UFS driver's first steps (ufs_alone, ufs_hc_area: never usable). They stay i
 
 | # | Part | Old files | Goes to | Notes |
 |---|---|---|---|---|
-| 4 | Panel (DSI) and its framebuffers | hk_dsi.c, hk_display.c, MiniIOMobileFramebuffer.cpp, MiniIOSurface.* | `soc/drivers/gpu/hakios.dsi.c`; the framebuffer's two buffers and MiniIOSurfaceDisplayUse as a patch | the no-tearing work (562d911) is generic |
 | 5 | Touch, buttons | hk_gt9886.c; hk_buttons.c (board_pon, board_volume_up) | `drivers/input/hakios.gt9886.c`; buttons: a patch for the PMIC addresses as arguments | |
 | 6 | Storage through the loader | (works with patch 0003) | `CONFIG_HAKIOS_UFS=y` | check that the reads still go |
 | 7 | GPU | hk_a618.c, hk_adreno.c changes | `soc/drivers/gpu/hakios.a618.c` `replaces ADRENO` | Mesa's freedreno for the A618: userland GL=1 |

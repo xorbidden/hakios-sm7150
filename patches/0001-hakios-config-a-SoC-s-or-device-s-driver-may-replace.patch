@@ -1,0 +1,120 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: xorbidden <xorbidden@proton.me>
+Date: Thu, 29 Oct 2026 12:09:40 +0100
+Subject: [PATCH] hakios-config: a SoC's or device's driver may replace a
+ common one (`replaces NAME`)
+
+A port whose SoC needs a different driver for a part the common repository already has (another audio DSP's
+memory map, another Adreno generation) keeps that driver in its own repository and says `replaces ADSP`: the
+common one is then left out, the replacement counts as it for `requires`, and hakios.drivers.h defines
+HAKIOS_ADSP so that drivers/core/hakios.stubs.c gives no stand-ins for what the replacement defines. Building
+both is refused, naming both. Only a SoC's or device's conf may say it.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ docs/drivers-config.md      |  1 +
+ drivers/core/hakios.stubs.c |  1 +
+ tools/hakios-config.py      | 28 +++++++++++++++++++++++++---
+ 3 files changed, 27 insertions(+), 3 deletions(-)
+
+diff --git a/docs/drivers-config.md b/docs/drivers-config.md
+index 9498751..17ec9cc 100644
+--- a/docs/drivers-config.md
++++ b/docs/drivers-config.md
+@@ -40,6 +40,7 @@ driver SOUND
+ | `driver NAME` | the symbol `CONFIG_HAKIOS_NAME`, the XNU option `HAKIOS_NAME`, the attribute `hakios_name` |
+ | `file PATH [OPTION...]` | one of its files, as its path in Apple's tree; a `.cpp` of `iokit/Kernel` also wants `iokitcpp` |
+ | `requires NAME...` | drivers it cannot be built without (it calls them, and nothing could stand in for them) |
++| `replaces NAME...` | (a SoC's or device's driver only) common drivers it stands in for: it defines what the rest of the kernel calls in them, so it is built instead of them, never with them, and it counts as them for `requires` and for `drivers/core/hakios.stubs.c` |
+ | `default y\|n` | what a configuration that does not name it gets; `y` if not said |
+ | `help TEXT` | what it is, and which boot-argument starts it; more `help` lines go on |
+ 
+diff --git a/drivers/core/hakios.stubs.c b/drivers/core/hakios.stubs.c
+index ed5ca7f..0a97ef5 100644
+--- a/drivers/core/hakios.stubs.c
++++ b/drivers/core/hakios.stubs.c
+@@ -21,6 +21,7 @@
+ #include <sys/hakios.input.h>
+ #include <sys/hakios.net.h>
+ #include <sys/hakios.virtio_blk.h>
++#include "hakios.drivers.h"     /* HAKIOS_<NAME> of a common driver a SoC's or device's driver replaces */
+ 
+ /* the ends of a run (loader_return.c, the guards), which have no header of their own */
+ void hakios_adsp_stop(void);
+diff --git a/tools/hakios-config.py b/tools/hakios-config.py
+index 68decaa..e2a2efe 100755
+--- a/tools/hakios-config.py
++++ b/tools/hakios-config.py
+@@ -198,6 +198,7 @@ class Driver:
+         self.name, self.sub, self.where = name, sub, where
+         self.origin = origin                # the SoC or device repository it comes from; None: this one's drivers/
+         self.files, self.requires, self.default, self.help = [], [], "y", ""
++        self.replaces = []                  # common drivers this one stands in for (a SoC's or device's only)
+ 
+     def source(self, path):
+         """Where a file of it is kept: drivers/<subsystem>/<name>, in this repository or in its own."""
+@@ -273,11 +274,16 @@ def load_drivers(root):
+                 elif key == "requires" and len(words) >= 2:
+                     block.requires += words[1:]
+                     continue
++                elif key == "replaces" and len(words) >= 2:
++                    if origin is None:
++                        raise ConfigError("%s: only a SoC's or device's driver replaces a common one" % where)
++                    block.replaces += words[1:]
++                    continue
+                 elif key == "default" and len(words) == 2 and words[1] in ("y", "n"):
+                     block.default = words[1]
+                     continue
+                 else:
+-                    raise ConfigError("%s: want file PATH, requires NAME..., default y|n or help TEXT, got %r" % (where, line.strip()))
++                    raise ConfigError("%s: want file PATH, requires NAME..., replaces NAME..., default y|n or help TEXT, got %r" % (where, line.strip()))
+             for f in files:
+                 if not f.startswith(("bsd/dev/hakios.", "iokit/Kernel/hakios.")) or not f.endswith((".c", ".cpp")):
+                     raise ConfigError("%s: %s is not a hakios.*.c or .cpp of bsd/dev/ or iokit/Kernel/" % (where, f))
+@@ -296,6 +302,9 @@ def load_drivers(root):
+                 close = difflib.get_close_matches(r, names, n=1)
+                 raise ConfigError("%s: %s requires %s, which no drivers/*/conf declares%s" % (
+                     d.where, d.name, r, " (did you mean %s?)" % close[0] if close else ""))
++        for r in d.replaces:
++            if r not in names or names[r].origin is not None:
++                raise ConfigError("%s: %s replaces %s, which is not a driver of the common repository" % (d.where, d.name, r))
+     return drivers, [tuple(s) for s in standard]
+ 
+ 
+@@ -571,11 +580,16 @@ def check_drivers(config, parsed):
+     if DRIVERS_ERROR:
+         return [DRIVERS_ERROR]
+     built = drivers_built(config)
++    standing_in = replaced(built)
+     for d in DRIVERS:
+         if built[d.symbol]:
+             for r in d.requires:
+-                if not built["HAKIOS_" + r]:
++                if not built["HAKIOS_" + r] and r not in standing_in:
+                     problems.append("CONFIG_%s requires CONFIG_HAKIOS_%s (%s)" % (d.symbol, r, d.where))
++            for r in d.replaces:
++                if built["HAKIOS_" + r]:
++                    problems.append("CONFIG_%s replaces CONFIG_HAKIOS_%s, which is built too: leave that one out (%s)" % (
++                        d.symbol, r, d.where))
+     left_out = {os.path.basename(f) for d in DRIVERS if not built[d.symbol] for f, _tags in d.files}
+     if not left_out:
+         return problems
+@@ -929,9 +943,17 @@ def master_hakios(built, sources):
+     return "\n".join(lines) + "\n"
+ 
+ 
++def replaced(built):
++    """{common driver: the SoC's or device's driver built in its place}."""
++    return {r: d.name for d in DRIVERS if built[d.symbol] for r in d.replaces}
++
++
+ def drivers_header(built, sources):
+     on = [d.name.lower() for d in DRIVERS if built[d.symbol]]
+-    return ("/* The drivers this kernel is built with: made by tools/hakios-config.py kernel from %s. Not part of the patch. */\n"
++    # a common driver another stands in for counts as built for the stand-ins of drivers/core/hakios.stubs.c: the one in its
++    # place defines what the rest of the kernel calls in it
++    standing_in = "".join("#define HAKIOS_%-20s 1   /* replaced by HAKIOS_%s */\n" % (r, by) for r, by in sorted(replaced(built).items()))
++    return standing_in + ("/* The drivers this kernel is built with: made by tools/hakios-config.py kernel from %s. Not part of the patch. */\n"
+             "#define HAKIOS_DRIVERS_LIST     \"%s\"\n#define HAKIOS_DRIVERS_COUNT    %d\n#define HAKIOS_DRIVERS_CONFIG   \"%s\"\n" %
+             (sources, " ".join(on), len(on), sources))
+ 

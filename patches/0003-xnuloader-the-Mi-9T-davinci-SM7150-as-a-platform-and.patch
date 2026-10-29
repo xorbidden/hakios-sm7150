@@ -1,0 +1,294 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: xorbidden <xorbidden@proton.me>
+Date: Thu, 29 Oct 2026 12:17:31 +0100
+Subject: [PATCH] xnuloader: the Mi 9T (davinci, SM7150) as a platform, and a
+ table the platform is picked from
+
+The loader knew redwood by its framebuffer and took everything else for QEMU. Now each phone is a
+`struct platform` in a table, picked by the framebuffer base its UEFI reports (redwood 0xE1000000,
+davinci 0x9C000000), or by the payload's `platform` entry (mkpayload.py --platform; xl gives $DEVICE)
+when the display did not come up, which on davinci happens some of the time.
+
+Three new fields a platform may set, none of which changes redwood:
+  no_flash_log   the loader's log never goes into the flash (davinci: over USB only)
+  vtimer_intid   the virtual timer's PPI in /arm-io/gic "vtimer-intid" (SM7150, as SDM845 and SM8150: 19,
+                 not 27); the kernel side reads it
+  fb_base        what picks it
+
+Also: when there is no block device yet the storage's drivers are connected, as a boot manager's
+"connect all" does (on davinci's UEFI nothing had connected UFSDxe; with this the loader's block
+service works there), and on davinci the UEFI's own log buffer is said when even that finds none;
+davinci's UEFI has the charger drivers too, so battery= is served there.
+
+Seen on the Mi 9T with hackios-xnu-kernel-davinci (6d40948): "platform davinci", the battery's level and
+charging, storage read through the loader, the kernel's timer ticking on PPI 19.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ xl                     |   2 +-
+ xnuloader/efi.h        |   2 +-
+ xnuloader/loader.c     | 122 +++++++++++++++++++++++++++++++++++++++--
+ xnuloader/mkpayload.py |   3 +
+ 4 files changed, 122 insertions(+), 7 deletions(-)
+
+diff --git a/xl b/xl
+index 7de0132..81577ab 100755
+--- a/xl
++++ b/xl
+@@ -129,7 +129,7 @@ enter() {
+ 		[ "$(state)" = absent ] && { echo "xl: phone not reachable"; return 1; }
+ 		enter; return ;;
+ 	esac
+-	xnuloader/mkpayload.py -o usb-payload.bin loader.efi=$L --usb >/dev/null &&
++	xnuloader/mkpayload.py -o usb-payload.bin loader.efi=$L --usb ${DEVICE:+--platform "$DEVICE"} >/dev/null &&
+ 		./mkxnuimg.py -p usb-payload.bin -o xnu-usb.img >/dev/null || { echo "xl: image build failed"; return 1; }
+ 	# Right after the phone enters fastboot the first "boot" is sometimes not taken: try twice.
+ 	local try
+diff --git a/xnuloader/efi.h b/xnuloader/efi.h
+index 2d35c83..28f0889 100644
+--- a/xnuloader/efi.h
++++ b/xnuloader/efi.h
+@@ -34,7 +34,7 @@ typedef struct efi_text_output {
+ 
+ enum { EfiLoaderData = 2, EfiConventionalMemory = 7 };
+ enum { AllocateAnyPages = 0, AllocateMaxAddress = 1, AllocateAddress = 2 };
+-enum { ByProtocol = 2 };
++enum { AllHandles = 0, ByProtocol = 2 };
+ 
+ typedef struct {
+ 	uint32_t type; uint32_t pad; uint64_t phys_start; uint64_t virt_start; uint64_t pages; uint64_t attribute;
+diff --git a/xnuloader/loader.c b/xnuloader/loader.c
+index 87ed0ff..7eb6542 100644
+--- a/xnuloader/loader.c
++++ b/xnuloader/loader.c
+@@ -254,6 +254,8 @@ clean_dcache(uint64_t start, uint64_t end)
+ /* ------------------------------------------------------------------------ */
+ /* Log persistence: raw write to a GPT partition (phone only)               */
+ 
++static int no_flash_log;                /* the platform's no_flash_log: as if there were no log partition */
++
+ static efi_block_io *
+ find_log_partition(void)
+ {
+@@ -263,6 +265,9 @@ find_log_partition(void)
+ 	efi_handle *handles;
+ 	uint64_t count;
+ 
++	if (no_flash_log) {
++		return NULL;
++	}
+ 	if (EFI_ERROR(BS->locate_handle_buffer(ByProtocol, &part_guid, NULL, &count, &handles))) {
+ 		return NULL;
+ 	}
+@@ -553,6 +558,9 @@ struct platform {
+ 	int core_shift;                  /* ... in this bit of MPIDR: the phone numbers them in the second affinity field */
+ 	uint32_t timeout_scale;          /* a kernel on several cores gets this much longer to wait for a lock, 0: as it is */
+ 	uint32_t small_cores;            /* a bit for each of the slower cores, by number: "small-core" in the device tree */
++	uint64_t fb_base;                /* the framebuffer its UEFI reports (GOP): how the loader tells the device */
++	int no_flash_log;                /* never write the loader's log to the phone's flash */
++	uint32_t vtimer_intid;           /* the EL1 virtual timer's interrupt (a PPI), 0: the usual 27 */
+ };
+ 
+ static const struct platform platform_qemu_virt = {
+@@ -578,6 +586,24 @@ static const struct platform platform_redwood = {
+ 	 * (XNU's machine_routines.c, ml_choose_slow_core_partners()).
+ 	 */
+ 	.small_cores = 0x0f,
++	.fb_base = 0xE1000000,
++};
++
++static const struct platform platform_davinci = {
++	/* Xiaomi Mi 9T, SM7150 (devices/davinci): redwood's GIC addresses, all its peripherals in redwood's window */
++	.name = "davinci", .io_base = 0x00400000, .io_size = 0x3FC00000,
++	.gic_dist = 0x17A00000, .gic_redist = 0x17A60000, .uart = 0, .log_other_cpu = 1,
++	.cores = 8, .core_shift = 8,
++	.small_cores = 0x3f,            /* cores 0-5 are Kryo 470 Silver (1.8 GHz), 6-7 Kryo 470 Gold (2.2 GHz) */
++	.fb_base = 0x9C000000,          /* "Display Reserved" in its UEFI's memory map */
++	.no_flash_log = 1,              /* the log goes over USB only, never into logdump */
++	.vtimer_intid = 19,             /* SM7150 (as SDM845, SM8150) wires the timers to PPIs 1-3: the virtual one is 19 */
++};
++
++/* The phones the loader knows, told apart by the framebuffer base their UEFI reports; a display that is none of them is QEMU's */
++static const struct platform *const platforms[] = {
++	&platform_redwood,
++	&platform_davinci,
+ };
+ 
+ /* ------------------------------------------------------------------------ */
+@@ -1413,6 +1439,72 @@ ufs_dump_super(efi_block_io *bio)
+ 	}
+ }
+ 
++/*
++ * The UEFI's own log: Qualcomm's drivers (UFSDxe among them, binaries with their own DebugLib) write theirs
++ * into the "Log Buffer" of the memory map (davinciPkg's MemoryMapLib.c: 0x9FFF7000, 32 KB). Its lines are
++ * said here, so that why a driver gave up reaches the loader's log (xl log). Reads memory only.
++ */
++#define UEFI_LOG_BASE   0x9FFF7000ULL
++#define UEFI_LOG_SIZE   0x8000ULL
++#define UEFI_LOG_SAID   12288ULL                /* at most this much of it, the rest of the loader's log is needed too */
++
++static void
++uefi_log_dump(void)
++{
++	const volatile char *log = (const volatile char *)(uintptr_t)UEFI_LOG_BASE;
++	char line[160];
++	uint64_t said = 0, n = 0;
++
++	print("uefi log: the UEFI's log buffer at %x, its printable lines:\n", UEFI_LOG_BASE);
++	for (uint64_t i = 0; i < UEFI_LOG_SIZE && said < UEFI_LOG_SAID; i++) {
++		char c = log[i];
++
++		if (c == '\n' || c == '\r' || c == 0 || n == sizeof(line) - 1) {
++			if (n > 3) {
++				line[n] = 0;
++				print("uefi log: %s\n", line);
++				said += n;
++			}
++			n = 0;
++		} else if (c >= 0x20 && c < 0x7f) {
++			line[n++] = c;
++		}
++	}
++	print("uefi log: end (%d bytes said)\n", said);
++}
++
++/*
++ * The storage's drivers attached, as a boot manager's "connect all" does: on davinci's UEFI nothing has
++ * connected UFSDxe to its controller when the loader runs (no block device at all), so every handle is
++ * connected, recursively, once, when there is no block device yet. Reads nothing of the storage.
++ */
++typedef efi_status (EFIAPI *efi_connect_controller)(efi_handle controller, efi_handle *driver, void *path, uint8_t recursive);
++
++static void
++ufs_connect(void)
++{
++	static const efi_guid blk_guid = EFI_BLOCK_IO_GUID;
++	efi_connect_controller connect = (efi_connect_controller)BS->connect_controller;
++	efi_handle *handles;
++	uint64_t count, connected = 0;
++
++	if (!EFI_ERROR(BS->locate_handle_buffer(ByProtocol, &blk_guid, NULL, &count, &handles)) && count != 0) {
++		return;
++	}
++	if (EFI_ERROR(BS->locate_handle_buffer(AllHandles, NULL, NULL, &count, &handles))) {
++		print("ufs: no handles to connect\n");
++		return;
++	}
++	for (uint64_t i = 0; i < count; i++) {
++		connected += !EFI_ERROR(connect(handles[i], NULL, NULL, 1));
++	}
++	print("ufs: no block device yet: %d handles connected (of %d)\n", connected, count);
++	if (PLAT == &platform_davinci &&
++	    (EFI_ERROR(BS->locate_handle_buffer(ByProtocol, &blk_guid, NULL, &count, &handles)) || count == 0)) {
++		uefi_log_dump();
++	}
++}
++
+ static void
+ ufs_survey(void)
+ {
+@@ -1421,6 +1513,8 @@ ufs_survey(void)
+ 	efi_handle *handles;
+ 	uint64_t count, units = 0, partitions = 0;
+ 
++	ufs_connect();
++
+ 	/* the raw logical units: the block devices that are not partitions of another */
+ 	if (!EFI_ERROR(BS->locate_handle_buffer(ByProtocol, &blk_guid, NULL, &count, &handles))) {
+ 		for (uint64_t i = 0; i < count; i++) {
+@@ -1909,6 +2003,7 @@ block_start(void)
+ 	uint64_t nunits = 0;
+ 
+ 	memset(&block_shared, 0, sizeof(block_shared));
++	ufs_connect();
+ 	block_tables();
+ 	/* the logical units: the block devices that are not partitions of another */
+ 	if (!EFI_ERROR(BS->locate_handle_buffer(ByProtocol, &blk_guid, NULL, &count, &handles))) {
+@@ -2206,7 +2301,8 @@ charger_start(void)
+ 	static const efi_guid qcom_charger_guid = QCOM_CHARGER_GUID;
+ 	efi_status ex_status, qcom_status, init_status = 0;
+ 
+-	if (charger_enabled || PLAT != &platform_redwood) {
++	/* the Mi 9T's UEFI has the same two drivers (davinciPkg's DXE.inc: ChargerExDxe, QcomChargerDxeLA) */
++	if (charger_enabled || (PLAT != &platform_redwood && PLAT != &platform_davinci)) {
+ 		return;
+ 	}
+ 	ex_status = BS->locate_protocol(&charger_ex_guid, NULL, (void **)&CHARGER_EX);
+@@ -2535,6 +2631,7 @@ struct payload_info {
+ 	uint64_t forced_base;
+ 	uint64_t resident_rd;           /* size of a root image the host put at the resident address */
+ 	const char *kernel_version;     /* kernel.ver: the version of the kernel in this payload (tools/kernel-version.py) */
++	const char *platform;           /* the device, for when its display does not tell (mkpayload.py --platform) */
+ 	int usb_mode;
+ };
+ 
+@@ -2594,7 +2691,9 @@ parse_payload(struct payload_info *pi, int verbose)
+ 			print("payload entry is larger than the payload (size %x): not used\n", (uint64_t)e->size);
+ 			return 0;
+ 		}
+-		if (str_eq(e->name, "ramdisk")) {
++		if (str_eq(e->name, "platform")) {
++			pi->platform = text;
++		} else if (str_eq(e->name, "ramdisk")) {
+ 			pi->ramdisk = p + sizeof(*e);             /* becomes /dev/md0, the root device */
+ 			pi->ramdisk_size = e->size;
+ 		} else if (str_eq(e->name, "kernel")) {
+@@ -3382,6 +3481,7 @@ run_kernel(int have_checkpoint, uint64_t checkpoint)
+ 	dt_prop_str(&w, "compatible", "arm,gic-v3");
+ 	uint64_t gic_reg[4] = { plat->gic_dist - plat->io_base, 0x10000, plat->gic_redist - plat->io_base, 0x100000 };
+ 	dt_prop(&w, "reg", gic_reg, sizeof(gic_reg));
++	dt_prop_u32(&w, "vtimer-intid", plat->vtimer_intid ? plat->vtimer_intid : 27);
+ 	dt_end(&w);
+ 	if (plat->uart != 0) {
+ 		dt_begin(&w, "uart0");
+@@ -4278,13 +4378,25 @@ efi_main(efi_handle image, efi_system_table *st)
+ 		SCREEN.width = GOP->mode->info->width;
+ 		SCREEN.height = GOP->mode->info->height;
+ 		SCREEN.stride = GOP->mode->info->pixels_per_scanline * 4;
+-		if (SCREEN.base == 0xE1000000ULL) {
+-			PLAT = &platform_redwood;
+-		} else {
++		for (unsigned i = 0; i < sizeof(platforms) / sizeof(platforms[0]); i++) {
++			if (platforms[i]->fb_base == SCREEN.base) {
++				PLAT = platforms[i];
++			}
++		}
++		if (PLAT == &platform_qemu_virt) {
+ 			ramfb_phone_screen();
+ 		}
+ 		print("display %d x %d at %x\n", (uint64_t)SCREEN.width, (uint64_t)SCREEN.height, SCREEN.base);
+ 	}
++	/* a display that did not come up (davinci's does only some of the time) leaves the device to the payload */
++	if (GOP == NULL && parse_payload(&pi, 0) && pi.platform != NULL) {
++		for (unsigned i = 0; i < sizeof(platforms) / sizeof(platforms[0]); i++) {
++			if (str_eq(platforms[i]->name, pi.platform)) {
++				PLAT = platforms[i];
++			}
++		}
++	}
++	no_flash_log = PLAT->no_flash_log;
+ 	print("platform %s\n", PLAT->name);
+ 
+ 	install_exception_hook();
+diff --git a/xnuloader/mkpayload.py b/xnuloader/mkpayload.py
+index 4eb8bfa..1d9089f 100755
+--- a/xnuloader/mkpayload.py
++++ b/xnuloader/mkpayload.py
+@@ -14,6 +14,7 @@ ap = argparse.ArgumentParser()
+ ap.add_argument('-o', '--output', required=True)
+ ap.add_argument('--cmdline', default='')
+ ap.add_argument('--physbase', default='', help='hex: force XNU physical base (testing)')
++ap.add_argument('--platform', default='', help='the device the loader is on, for when its display does not tell (davinci)')
+ ap.add_argument('--usb', action='store_true', help='make the loader stay resident and take commands over USB')
+ ap.add_argument('--rdres', default='', help='hex size of a root image already placed at the resident address (QEMU)')
+ ap.add_argument('--checkpoint', default='', help='kernel checkpoint to stop at; 999 = loader self test')
+@@ -37,6 +38,8 @@ if args.physbase:
+     add('physbase', args.physbase.lower().replace('0x', '').encode() + b'\0')
+ if args.rdres:
+     add('rdres', args.rdres.lower().replace('0x', '').encode() + b'\0')
++if args.platform:
++    add('platform', args.platform.encode() + b'\0')
+ if args.usb:
+     add('usb', b'1\0')
+ if args.checkpoint:

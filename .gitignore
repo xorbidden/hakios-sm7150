@@ -1,0 +1,7 @@
+# The vendor's files are never in the repository: Qualcomm's UEFI drivers are extracted from your own ROM
+# (uefi/README.md); only the list of the patches applied to them is kept.
+/uefi/files/Binaries/davinci/*
+!/uefi/files/Binaries/davinci/README.md
+__pycache__/
+# the UEFI image carries Qualcomm's drivers: built locally (uefi/README.md), never in the repository
+/prebuilt/SILICIUM_UEFI.fd

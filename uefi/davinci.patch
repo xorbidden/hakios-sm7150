@@ -1,0 +1,47 @@
+diff --git a/Silicon/Silicium/SiliciumPkg/Library/BootManagerLib/XnuLoader.c b/Silicon/Silicium/SiliciumPkg/Library/BootManagerLib/XnuLoader.c
+index 65ef539..a6ce7b8 100644
+--- a/Silicon/Silicium/SiliciumPkg/Library/BootManagerLib/XnuLoader.c
++++ b/Silicon/Silicium/SiliciumPkg/Library/BootManagerLib/XnuLoader.c
+@@ -214,6 +214,11 @@ FlushLog ()
+   UINTN                  BlockSize;
+   UINTN                  WriteSize;
+ 
++#ifdef XNU_NO_FLASH_LOG
++  // A platform that must not write to the phone's flash (davinci): the log stays in RAM.
++  return;
++#endif
++
+   BlockIo = FindPartition (XNU_LOG_PARTITION);
+   if (BlockIo == NULL) {
+     return;
+@@ -299,6 +304,12 @@ XnuLoaderMain ()
+     FlushLog ();
+   }
+ 
++#ifdef XNU_DIAG_SHUTDOWN
++  // A platform that wants a failed start told apart from a watchdog's reset without a display or a log (davinci):
++  // power off.
++  gRT->ResetSystem (EfiResetShutdown, EFI_SUCCESS, 0, NULL);
++#endif
++
+   // The phone is unattended: always come back to Android.
+   gRT->ResetSystem (EfiResetCold, EFI_SUCCESS, 0, NULL);
+ }
+diff --git a/Silicon/Silicium/SiliciumPkg/Sec/Sec.c b/Silicon/Silicium/SiliciumPkg/Sec/Sec.c
+index 511fc76..e1fc556 100644
+--- a/Silicon/Silicium/SiliciumPkg/Sec/Sec.c
++++ b/Silicon/Silicium/SiliciumPkg/Sec/Sec.c
+@@ -94,6 +94,13 @@ SecMain (VOID)
+ {
+   EFI_STATUS Status;
+ 
++#ifdef XNU_DISABLE_APSS_WDT
++  // A platform whose boot loader leaves the APSS watchdog running (davinci: qcom,msm-watchdog, a 20 s bark) and
++  // nothing here pets it: stop it, WDT0_EN at base + 0x08.
++  *(volatile UINT32 *)(UINTN)(XNU_DISABLE_APSS_WDT + 0x08) = 0;
++  __asm__ volatile ("dsb sy" ::: "memory");
++#endif
++
+   // Do Platform Specific Initialization
+   PlatformInitialize ();
+ 

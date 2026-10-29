@@ -1,0 +1,148 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: xorbidden <xorbidden@proton.me>
+Date: Thu, 29 Oct 2026 12:14:25 +0100
+Subject: [PATCH] mkxnuimg.py, make: the boot image of the device configured,
+ not always redwood's
+
+DEVICE (the .config's CONFIG_DEVICE after `make <name>_defconfig`, else redwood, as before) now picks the
+UEFI that mkxnuimg.py packs: its Mu-Silicium build (Build/<device>Pkg, Resources/DTBs/<device>.dtb) or
+devices/<device>/prebuilt/, and the UEFI image's base and size from the port's Resources/Configs/<device>.toml
+([uefi_fd]) instead of redwood's 0x9FD00000/0x200000 (the Mi 9T's is 0x9FC00000/0x300000). make exports it,
+so ./xl and tools/modem-cycle.sh see it too; the run scripts take that device's soc.args rather than the
+first devices/*/soc.args there is (with two devices checked out, the other one's could be taken).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ Makefile                 |  6 ++++--
+ mkxnuimg.py              | 43 ++++++++++++++++++++++++++++++++--------
+ tools/modem-cycle-win.sh |  2 +-
+ tools/modem-cycle.sh     |  2 +-
+ 4 files changed, 41 insertions(+), 12 deletions(-)
+
+diff --git a/Makefile b/Makefile
+index d44af8f..6f496f6 100644
+--- a/Makefile
++++ b/Makefile
+@@ -28,12 +28,14 @@
+ #   make phone               with a .config, its arguments are the kernel's; without, the phone line below
+ #   FRAGMENTS="open trace"   fragments for a NAME_defconfig: make redwood_defconfig FRAGMENTS=open
+ #
+-#   DEVICE=redwood   the device directory under devices/ (default redwood)
++#   DEVICE=redwood   the device directory under devices/ (default: the .config's CONFIG_DEVICE, else redwood)
+ #   ARGS="..."           kernel arguments for make phone (default: the .config's, else everything the phone has)
+ #   SECS=600             the session's length for make phone / make qemu
+ #   JOBS=8               parallel jobs for the kernel build
+ 
+-DEVICE ?= redwood
++# the device: the .config's CONFIG_DEVICE (make <name>_defconfig) when there is one; exported for xl and mkxnuimg.py
++DEVICE ?= $(or $(shell sed -n 's/^CONFIG_DEVICE="\(.*\)"/\1/p' .config 2>/dev/null),redwood)
++export DEVICE
+ JOBS ?= 8
+ SECS ?= 600
+ # qemu-open runs the open configuration: configs/defconfig (nothing of a phone's own, one core)
+diff --git a/mkxnuimg.py b/mkxnuimg.py
+index f13d3e9..f25b51c 100755
+--- a/mkxnuimg.py
++++ b/mkxnuimg.py
+@@ -1,6 +1,6 @@
+ #!/usr/bin/env python3
+ """
+-Pack the redwood UEFI (with the hook that starts the XNU loader) and an optional payload
++Pack a device's UEFI (with the hook that starts the XNU loader) and an optional payload
+ into an Android boot image for `fastboot boot`.
+ 
+   kernel = gzip(BootShim + UEFI FD + ["XNUP" container]) + DTB
+@@ -8,25 +8,52 @@ into an Android boot image for `fastboot boot`.
+ The boot shim copies the FD to its base and the payload to PAYLOAD_BASE.
+ 
+ The UEFI pieces are taken from a Mu-Silicium tree built here (Mu-Silicium/, see uefi/README.md)
+-or, when there is none, from devices/redwood/prebuilt/.
++or, when there is none, from devices/<device>/prebuilt/. The device is $DEVICE, else the .config's CONFIG_DEVICE,
++else redwood; where its UEFI image lives and how big it is comes from its port's Resources/Configs/<device>.toml.
+ 
+ usage: mkxnuimg.py [-p payload.bin] [-o out.img]
+ """
+-import argparse, gzip, os, subprocess, sys
++import argparse, gzip, os, re, subprocess, sys
+ 
+ HERE = os.path.dirname(os.path.abspath(__file__))
+ MU = os.path.join(HERE, 'Mu-Silicium')
+-PREBUILT = os.path.join(HERE, 'devices', 'redwood', 'prebuilt')
+-FD_BASE, FD_SIZE = 0x9FD00000, 0x200000
++
++
++def config_device():
++    try:
++        m = re.search(r'^CONFIG_DEVICE="([^"]+)"', open(os.path.join(HERE, '.config')).read(), re.M)
++    except OSError:
++        return None
++    return m.group(1) if m else None
++
++
++DEVICE = os.environ.get('DEVICE') or config_device() or 'redwood'
++PREBUILT = os.path.join(HERE, 'devices', DEVICE, 'prebuilt')
++
++
++def uefi_fd():
++    """(base, size) of the UEFI image: [uefi_fd] of the device's Resources/Configs/<device>.toml; redwood's if none."""
++    for top in (os.path.join(HERE, 'devices', DEVICE, 'uefi', 'files'), MU):
++        try:
++            text = open(os.path.join(top, 'Resources', 'Configs', DEVICE + '.toml')).read()
++        except OSError:
++            continue
++        m = re.search(r'^\[uefi_fd\]\s*\nbase\s*=\s*(0x[0-9a-fA-F]+)\s*\nsize\s*=\s*(0x[0-9a-fA-F]+)', text, re.M)
++        if m:
++            return int(m.group(1), 16), int(m.group(2), 16)
++    return 0x9FD00000, 0x200000
++
++
++FD_BASE, FD_SIZE = uefi_fd()
+ PAYLOAD_BASE, PAYLOAD_MAX = 0xF0000000, 0x04000000
+ 
+ ap = argparse.ArgumentParser()
+ ap.add_argument('-p', '--payload')
+-ap.add_argument('-o', '--output', default=os.path.join(HERE, 'xnu-redwood.img'))
++ap.add_argument('-o', '--output', default=os.path.join(HERE, 'xnu-%s.img' % DEVICE))
+ ap.add_argument('--mode', default='RELEASE')
+ args = ap.parse_args()
+ 
+-fd_path = os.path.join(MU, f'Build/redwoodPkg/{args.mode}_CLANGPDB/FV/SILICIUM_UEFI.fd')
++fd_path = os.path.join(MU, f'Build/{DEVICE}Pkg/{args.mode}_CLANGPDB/FV/SILICIUM_UEFI.fd')
+ if os.path.isfile(fd_path):
+     shim_dir = os.path.join(MU, 'BootShim')
+     for f in ('BootShim.elf', 'BootShim.bin'):
+@@ -36,7 +63,7 @@ if os.path.isfile(fd_path):
+                            f'CFLAGS=--target=aarch64-linux-gnu -DPAYLOAD_BASE={PAYLOAD_BASE:#x}'],
+                           cwd=shim_dir, stdout=subprocess.DEVNULL)
+     parts = {'shim': os.path.join(shim_dir, 'BootShim.bin'), 'fd': fd_path,
+-             'dtb': os.path.join(MU, 'Resources/DTBs/redwood.dtb'), 'ramdisk': os.path.join(MU, 'Resources/ramdisk'),
++             'dtb': os.path.join(MU, f'Resources/DTBs/{DEVICE}.dtb'), 'ramdisk': os.path.join(MU, 'Resources/ramdisk'),
+              'mkbootimg': os.path.join(MU, 'Resources/Scripts/mkbootimg.py')}
+ else:
+     parts = {'shim': os.path.join(PREBUILT, 'BootShim.bin'), 'fd': os.path.join(PREBUILT, 'SILICIUM_UEFI.fd'),
+diff --git a/tools/modem-cycle-win.sh b/tools/modem-cycle-win.sh
+index 60bd280..9282a5d 100755
+--- a/tools/modem-cycle-win.sh
++++ b/tools/modem-cycle-win.sh
+@@ -14,7 +14,7 @@ ARGS=$1; SECS=${2:-300}
+ # A port's SoC addresses (devices/<name>/soc.args, made by devices/<name>/pull-soc.sh): added to the
+ # kernel command line so hakios.mpss.c / hakios.ipa.c map that phone's blocks. SOC_ARGS names the file;
+ # default is the one device there is. The POCO's values equal the kernel defaults, so this is a no-op there.
+-SOC_ARGS=${SOC_ARGS-$(ls devices/*/soc.args 2>/dev/null | head -1)}
++SOC_ARGS=${SOC_ARGS-$(ls devices/${DEVICE:-*}/soc.args 2>/dev/null | head -1)}   # $DEVICE's (make exports it), else the first there is
+ # only what differs from the kernel's built-in defaults: the rest changes nothing, and the command line is short
+ . tools/soc-only-changes.sh
+ SOC=""; [ -n "$SOC_ARGS" ] && SOC=$(soc_only_changes "$SOC_ARGS" | tr '\n' ' ')
+diff --git a/tools/modem-cycle.sh b/tools/modem-cycle.sh
+index 4bbd5af..2c2fd63 100755
+--- a/tools/modem-cycle.sh
++++ b/tools/modem-cycle.sh
+@@ -11,7 +11,7 @@ ARGS=$1; SECS=${2:-300}
+ # A port's SoC addresses (devices/<name>/soc.args, made by devices/<name>/pull-soc.sh): added to the
+ # kernel command line so hakios.mpss.c / hakios.ipa.c map that phone's blocks. SOC_ARGS names the file;
+ # default is the one device there is. The POCO's values equal the kernel defaults, so this is a no-op there.
+-SOC_ARGS=${SOC_ARGS-$(ls devices/*/soc.args 2>/dev/null | head -1)}
++SOC_ARGS=${SOC_ARGS-$(ls devices/${DEVICE:-*}/soc.args 2>/dev/null | head -1)}   # $DEVICE's (make exports it), else the first there is
+ # only what differs from the kernel's built-in defaults: the rest changes nothing, and the command line is short
+ . tools/soc-only-changes.sh
+ SOC=""; [ -n "$SOC_ARGS" ] && SOC=$(soc_only_changes "$SOC_ARGS" | tr '\n' ' ')

@@ -1,97 +1,53 @@
-# Device: DAVINCI (davinci)
+# hakios-sm7150: the Xiaomi Mi 9T / Redmi K20 (davinci) and its Snapdragon 730 (SM7150)
 
-Made by `tools/new-device.py` on 2026-10-29, from the file davinci.dtb. Edit it as the port goes.
+One HakiOS device repository, in the layout of [hakios-sm7325](https://github.com/oosexgang/hakios-sm7325): the device
+(`device.conf`, `configs/`, its drivers, its UEFI platform, its firmware script) and its SoC family's layer (`soc/`: SM7150,
+"sdmmagpie"). It lives in `devices/davinci/` of a checkout of the common repository
+([oosexgang/hakios-xnu-kernel](https://github.com/oosexgang/hakios-xnu-kernel), branch `hakios`), which it never changes
+in place: everything the port needs that is not a file of its own is a patch in `patches/`.
 
-| What | Value |
+| What | Where |
 |---|---|
-| Board (the tree's `model`) | DAVINCI |
-| Compatible | `qcom,sdmmagpie-qrd qcom,sdmmagpie qcom,qrd` |
+| What works, part by part | `device.conf` (`status` lines: only what was seen on the phone is `works`) |
+| The configuration | `configs/davinci_defconfig` = common + `soc/configs/sm7150.config` + `configs/davinci.config` |
+| Drivers of the SoC (Adreno 618, DSI, the audio DSP's memory map, ...) | `soc/drivers/<subsystem>/` |
+| Drivers of this phone only (GT9886 touch, TFA9874 amplifier, the cameras, ...) | `drivers/<subsystem>/` |
+| Changes to common files, until upstream has them | `patches/NNNN-*.patch`, applied by `patches/apply.sh` |
+| The SoC's addresses for the common drivers | `soc.args` (`docs/soc-args.md`: where each comes from) |
+| UEFI | `uefi/`: the davinci platform for HakiOS's UEFI (`hakios-uefi`) and `davinci.patch` |
+| Prebuilt boot pieces | `prebuilt/`: `BootShim.bin` (for this UEFI's 0x9FC00000/0x300000), `device-tree.dtb`, `ramdisk`, `mkbootimg.py` |
+| The phone's firmware | **not in the repository**: `pull-firmware.sh` takes it out of Xiaomi's fastboot ROM into `fw-*/` |
+| Bringing the old port over | `docs/MIGRATION.md`: what of hackios-xnu-kernel-davinci is here already, what is still to come |
 
-## The SoC addresses
+## Setting up
 
-No reference tree to compare with (devices/redwood/prebuilt/device-tree.dtb is missing).
+```sh
+git clone -b hakios https://github.com/oosexgang/hakios-xnu-kernel.git hakios && cd hakios
+git clone git@github.com:xorbidden/hakios-sm7150.git devices/davinci
+tools/hakios-device.py sync redwood hakios-uefi   # the reference device and the UEFI, as the manifest names them
+devices/davinci/patches/apply.sh                  # local branch `davinci` = upstream + this port's patches
+make davinci_defconfig
+```
 
-| Argument | Value | Against the reference |
-|---|---|---|
-| `soc_ipa_base` | `0x1e40000` |  |
-| `soc_gsi_base` | `0x1e04000` |  |
-| `soc_ipcc` | `(not found)` | **missing**: the tree has no node this was read from; see the table in devices/redwood/README.md |
-| `soc_aoss` | `0xc300000` |  |
-| `soc_rsc` | `(not found)` | **missing**: the tree has no node this was read from; see the table in devices/redwood/README.md |
-| `soc_apps_smmu` | `0x15000000` |  |
-| `soc_cmd_db` | `(not found)` | **missing**: the tree has no node this was read from; see the table in devices/redwood/README.md |
-| `soc_mpss_mem` | `(not found)` | **missing**: the tree has no node this was read from; see the table in devices/redwood/README.md |
-| `modem_ipa_fw_at` | `(not found)` | **missing**: the tree has no node this was read from; see the table in devices/redwood/README.md |
-| `soc_smem` | `0x86000000` |  |
-| `soc_imem` | `0x14600000` |  |
-| `soc_ipa_stream` | `0x520` |  |
-| `soc_ipa_stream_uc` | `0x522` |  |
-| `soc_pas_mpss` | `0x4` |  |
-| `soc_pas_ipa` | `0xf` |  |
-| `soc_ipa_fw` | `ipa_fws` |  |
+## Taking the common repository's updates
 
-`soc.args` is what `tools/soc-args.py` read out of the tree; `pull-soc.sh` makes it again from the phone on
-adb. The run scripts add it to the kernel command line. Where each argument comes from in the tree:
-`devices/redwood/README.md`.
+```sh
+git fetch origin                                  # (or `upstream`, whichever remote is oosexgang's)
+devices/davinci/patches/apply.sh                  # the branch made again on the new upstream, the patches on top
+```
 
-## What is this phone's own
-
-The kernel, loader and user space know nothing about a phone: addresses, interrupts, rails and firmware
-come from its tree and its Android. What is written for one phone is the list below. The head of each file
-says where its numbers came from; that is the map of what to rewrite.
-
-- [ ] **UEFI**: the firmware that starts the loader: devices/redwood/uefi/ is a port of Mu-Silicium; the vendor's drivers are extracted from your own phone (uefi/README.md)
-- [ ] **Display, buttons, touch**: drivers/input/hakios.input.c, hakios.buttons.c, hakios.goodix.c (the reference phone's controller; another phone has another)
-- [ ] **Storage**: hakios.ufs.c and hakios.ufshc.c (UFS); a phone with eMMC needs another driver
-- [ ] **CPU clocks**: hakios.cpufreq.c
-- [ ] **GPU**: hakios.adreno.c (Adreno 642L here: another generation needs its own firmware and registers)
-- [ ] **Wi-Fi**: hakios.wifi.c, hakios.lx.c and wifi/lx/ (the WCN6750 radio of the reference phone)
-- [ ] **Audio and battery**: hakios.adsp.c, hakios.audio.c, hakios.sound.c, hakios.speaker.c, hakios.mic.c, hakios.battery.c
-- [ ] **Cellular**: hakios.mpss.c, hakios.qmi.c, hakios.nas.c, hakios.ipa.c, hakios.cell.c; soc.args carries the addresses, the IPA layout is for IPA 4.11 (docs/cellular.md)
-- [ ] **Haptics and cameras**: hakios.haptic.c, hakios.camera.c
-
-## Configuration
-
-The kernel's settings are layered the way an Android kernel's are: the common kernel, the SoC's, this phone's
-(`docs/configs.md`). Two short files make this phone a configuration:
-
-    configs/davinci.config          CONFIG_DEVICE="davinci"   and whatever is true of this phone only
-    configs/davinci_defconfig       #include common_defconfig
-                                   #include <the SoC's fragment: sc7280.config for the SC7280 family>
-                                   #include davinci.config
-
-Then `make davinci_defconfig`. Turn on only what this phone has been shown to do; `tools/hakios-config.py check` says what the
-choice needs.
-
-The drivers are part of the configuration too (`docs/drivers-config.md`): every one is built unless a configuration leaves it out,
-and the addresses, pins and rails in each are the reference phone's. Leave out in `configs/davinci.config` what has not been
-ported to this phone yet (`# CONFIG_HAKIOS_GOODIX is not set`, ...; `configs/qemu_defconfig` leaves out all of them), and put
-each one back when it has been made to work here. `tools/hakios-config.py show` lists what is built in.
+A patch that no longer applies stops on it (`git am`): resolve, `git am --continue`, then `devices/davinci/patches/export.sh`
+and commit the refreshed patches here. Nothing of the port is in the common checkout's own history, so a new upstream can
+never take it away.
 
 ## Firmware
 
-Pulled from your own phone, never committed: `devices/redwood/pull-firmware.sh`, or
-`pull-firmware-root.sh` where the firmware is readable by root only. Check with `make doctor`.
+```sh
+devices/davinci/pull-firmware.sh ~/Downloads/davinci_eea_global_images_V12.1.1.0.RFJEUXM_*.tgz   # or ROM=... make firmware
+```
 
-## Before you open a pull request
+## UEFI
 
-`tools/provenance-check.py` must pass: no vendor firmware, no UEFI drivers, no Apple files in the tree.
-
-## The repository
-
-A HakiOS device repository: what is true of this device and of no other. The kernel, the loader, the drivers and the tools are
-the common repository's; the sm7150 family's facts are in `soc/`, carried with the device. How the three are put together:
-[docs/porting/repositories.md](https://github.com/oosexgang/hakios/blob/main/docs/porting/repositories.md).
-
-| File | What |
-|---|---|
-| `device.conf` | what the device is, and how far each part of it works: its page in the documentation is made from it |
-| `configs/davinci_defconfig` | the common kernel, the SoC's fragment, this device's: `make davinci_defconfig` |
-| `configs/davinci.config` | what is this device's own: the drivers built in, the arguments it needs |
-| `soc/` | its SoC family's layer (sm7150): `soc.conf`, `configs/sm7150.config`, the SoC's drivers; carried here so that this one repository is all the device needs |
-| `drivers/` | drivers of its own, if it needs any (`drivers/<subsystem>/conf`, as in the common repository) |
-
-Every phone driver of the common repository is left out to begin with: their addresses and pins are the phone they were written
-for. Put one back in `configs/davinci.config` when it has been made to work here, and say so in `device.conf`.
-
-Check with `tools/hakios-device.py check davinci`.
+`uefi/files/Binaries/davinci/` (Qualcomm's UEFI drivers, out of the ROM's `xbl.elf` with UEFIReader, patched by
+`uefi/tools/patch-davinci-uefi.py`) and `prebuilt/SILICIUM_UEFI.fd` stay on your machine: git ignores them. Then
+`devices/davinci/uefi/apply.sh` and Mu-Silicium's `build_uefi.py -d davinci`.

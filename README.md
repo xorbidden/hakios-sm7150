@@ -17,37 +17,11 @@ in place: everything the port needs that is not a file of its own is a patch in 
 | UEFI | `uefi/`: the davinci platform for HakiOS's UEFI (`hakios-uefi`) and `davinci.patch` |
 | Prebuilt boot pieces | `prebuilt/`: `BootShim.bin` (for this UEFI's 0x9FC00000/0x300000), `device-tree.dtb`, `ramdisk`, `mkbootimg.py` |
 | The phone's firmware | **not in the repository**: `pull-firmware.sh` takes it out of Xiaomi's fastboot ROM into `fw-*/` |
+| How to build and run it | **`docs/GUIDE.md`** |
 | Bringing the old port over | `docs/MIGRATION.md`: what of hackios-xnu-kernel-davinci is here already, what is still to come |
 
-## Setting up
+## Setting up, building, running
 
-```sh
-git clone -b hakios https://github.com/oosexgang/hakios-xnu-kernel.git hakios && cd hakios
-git clone git@github.com:xorbidden/hakios-sm7150.git devices/davinci
-tools/hakios-device.py sync redwood hakios-uefi   # the reference device and the UEFI, as the manifest names them
-devices/davinci/patches/apply.sh                  # local branch `davinci` = upstream + this port's patches
-make davinci_defconfig
-```
-
-## Taking the common repository's updates
-
-```sh
-git fetch origin                                  # (or `upstream`, whichever remote is oosexgang's)
-devices/davinci/patches/apply.sh                  # the branch made again on the new upstream, the patches on top
-```
-
-A patch that no longer applies stops on it (`git am`): resolve, `git am --continue`, then `devices/davinci/patches/export.sh`
-and commit the refreshed patches here. Nothing of the port is in the common checkout's own history, so a new upstream can
-never take it away.
-
-## Firmware
-
-```sh
-devices/davinci/pull-firmware.sh ~/Downloads/davinci_eea_global_images_V12.1.1.0.RFJEUXM_*.tgz   # or ROM=... make firmware
-```
-
-## UEFI
-
-`uefi/files/Binaries/davinci/` (Qualcomm's UEFI drivers, out of the ROM's `xbl.elf` with UEFIReader, patched by
-`uefi/tools/patch-davinci-uefi.py`) and `prebuilt/SILICIUM_UEFI.fd` stay on your machine: git ignores them. Then
-`devices/davinci/uefi/apply.sh` and Mu-Silicium's `build_uefi.py -d davinci`.
+`docs/GUIDE.md`: what the phone needs, the firmware out of Xiaomi's ROM, the UEFI, the build (`make davinci_defconfig`,
+`soc/wifi/mk-ath10k.sh`, `make kernel`), a session on the phone (`make phone`), and taking the common repository's
+updates (`patches/apply.sh`).

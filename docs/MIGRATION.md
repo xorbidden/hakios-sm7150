@@ -48,6 +48,7 @@ The rule for where a piece goes:
 | Wi-Fi: the WCN3990 under ath10k (`wifi_ath10k=1 wifi_smmu=2 wifi_station=1`) | `soc/drivers/wifi/` (`WIFI_SM7150`: hakios.wifi_sm7150.c, hakios.wlfw10.c, `replaces WIFI`), `soc/wifi/` (ath10k's platform lx_snoc.c, include10/, mk-ath10k.sh), patch 0019 (fw/network for any radio) -- seen on the phone 2026-10-29 |
 | Flashlight: the PM6150L's flash module (`pmic_flash=0x5d3`, `torch=3`) | patch 0020 (common torch driver: a layout per PMIC) (built; not yet run) |
 | Cameras: the Mi 9T's IMX582 and pop-up S5K3T2 (`cam=5`) | `drivers/camera/hakios.cam_davinci.c`, `replaces CAMERA`; patch 0021 (the stream's camera chosen before its first read) (built; not yet run) |
+| User guide for the new layout | `docs/GUIDE.md` (was docs/DAVINCI.md), README |
 | Brightness: iOS's slider to the panel (kern.hakios.panel_brightness) | patch 0022 (inject.c) (built; not yet run) |
 | Bluetooth: the WCN3990 brought up (`bt=5`), not yet used by iOS | `soc/drivers/bluetooth/hakios.bt_wcn3990.c`, `replaces BT` (built; not yet run) |
 | CPU clocks through the OSM (`cpufreq=1`) | `soc/drivers/power/hakios.cpufreq_osm.c`, `replaces CPUFREQ` -- seen on the phone 2026-10-29 |
@@ -68,5 +69,19 @@ own UFS driver's first steps (ufs_alone, ufs_hc_area: never usable). They stay i
 
 | # | Part | Old files | Goes to | Notes |
 |---|---|---|---|---|
-| 13 | Userland bits | mkjobs.py, net_test.m, inject*.c (brightness), camera_device.c (the firmware staging is done: userland.sh) | patches, or the device's own image fragment if upstream has one | |
-| 14 | Docs | docs/DAVINCI.md | `docs/` here, and the device's page through device.conf | |
+| 13 | Userland bits left | mkjobs.py (5eb355e: every on-demand job in its own file), net_test.m (configd's network service; Wi-Fi works without it in the new layout) | compare with upstream; patches only if something is missing on the phone | |
+
+## Next, in this order (the user, 2026-10-29)
+
+1. See cameras, flashlight and brightness on the phone (built), then Bluetooth's bring-up (`bt=5`, built).
+2. Tidy what the move left: slim `soc/drivers/wifi/hakios.wifi_sm7150.c` to the WCN3990's path; let the camera driver
+   use `soc/drivers/core/hakios.rpmh.c` instead of its own copy of the RPMh code; a script that makes the UEFI's
+   `Binaries/davinci` from the ROM's `xbl.elf`.
+3. Offer the common patches upstream (pull requests from xorbidden/hakios-xnu-kernel), and davinci's block in
+   `devices/manifest.conf`.
+
+## Later phase: what iOS does with the hardware
+
+Bluetooth in iOS (bluetoothd's AppleBluetoothModule user client), GPS, cellular, the App Store; the focus motor, the
+tele and ultra-wide cameras. (The old plan's notes: WORK_DIR/PORTING_PLAN.md of the hackios workspace.)
+

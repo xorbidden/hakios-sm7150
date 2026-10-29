@@ -31,12 +31,13 @@ The rule for where a piece goes:
 | Device drivers register their quiesce/stop on the way back | patch 0006 (loader_return.c) |
 | The kernel's log mirrored to the loader from kprintf's start | patch 0007 |
 | Kernel builds on Ubuntu (mawk, python3 only) | patches 0008, 0009 |
-| RPMh helpers for the SoC's drivers (LDOs, bus votes) on upstream's hakios_rsc_lock | `soc/drivers/core/hakios.rpmh.c` (built) |
-| The panel (DSI command mode) with two framebuffers, via the panel interface and return hooks | `drivers/gpu/hakios.dsi.c` (built; not yet run) |
-| Touch: GT9886 in place of the common Goodix driver (`touchscreen=1`) | `drivers/input/hakios.gt9886.c`, `replaces GOODIX` (built) |
-| Buttons: the PM6150's power-on block and PM6150L GPIO 2 | patch 0010 (common buttons driver: gen2 PON, `pmic_pon=`, `pmic_volume_up=`) (built) |
-| Storage through the loader's block service | the common UFS driver, unchanged (`CONFIG_HAKIOS_UFS=y`, `ufs=2`) (built) |
-| CPU clocks through the OSM (`cpufreq=1`) | `soc/drivers/power/hakios.cpufreq_osm.c`, `replaces CPUFREQ` (built; not yet run) |
+| `make phone` on Linux (macOS shims only on macOS) | patch 0011 |
+| RPMh helpers for the SoC's drivers (LDOs, bus votes) on upstream's hakios_rsc_lock | `soc/drivers/core/hakios.rpmh.c` -- seen on the phone 2026-10-29 |
+| The panel (DSI command mode) with two framebuffers, via the panel interface and return hooks | `drivers/gpu/hakios.dsi.c` -- seen on the phone 2026-10-29 |
+| Touch: GT9886 in place of the common Goodix driver (`touchscreen=1`) | `drivers/input/hakios.gt9886.c`, `replaces GOODIX` -- seen on the phone 2026-10-29 |
+| Buttons: the PM6150's power-on block and PM6150L GPIO 2 | patch 0010 (common buttons driver: gen2 PON, `pmic_pon=`, `pmic_volume_up=`) -- seen on the phone 2026-10-29 |
+| Storage through the loader's block service | the common UFS driver, unchanged (`CONFIG_HAKIOS_UFS=y`, `ufs=2`) -- seen on the phone 2026-10-29 |
+| CPU clocks through the OSM (`cpufreq=1`) | `soc/drivers/power/hakios.cpufreq_osm.c`, `replaces CPUFREQ` -- seen on the phone 2026-10-29 |
 
 Left out on purpose: the old bring-up diagnostics (XNU_DIAG_* in the loader and UEFI, gic_v3_timer_report), the
 install-to-flash mode of the metal release (flashboot.c, darwinfile.c, crypto.c: upstream dropped it), and the kernel's

@@ -1,0 +1,42 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: xorbidden <xorbidden@proton.me>
+Date: Thu, 29 Oct 2026 12:57:16 +0100
+Subject: [PATCH] modem-cycle.sh: put the macOS shims on PATH only on macOS
+
+The script prepended tools/macos-bin to PATH on every host. On Linux
+its timeout wrapper execs /opt/local/bin/gtimeout, which does not
+exist, so every fastboot call through xl failed, the loader was never
+recognised ("loader did not come up on USB (state: fastboot)") and
+`make phone` could not start a run. xl already guards the same line
+with a Darwin check; do the same here.
+
+Tested on Ubuntu 26.04: `make phone` reaches the loader again.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ tools/modem-cycle.sh | 5 +++--
+ 1 file changed, 3 insertions(+), 2 deletions(-)
+
+diff --git a/tools/modem-cycle.sh b/tools/modem-cycle.sh
+index 2c2fd63..8d71650 100755
+--- a/tools/modem-cycle.sh
++++ b/tools/modem-cycle.sh
+@@ -4,7 +4,8 @@
+ # (or fastboot) for the next run (XL_END=android: back to Android).
+ # The phone is never flashed: the kernel is booted with "fastboot boot"-like upload through xl.
+ cd "$(dirname "$0")/.." || exit 1
+-PATH=$PWD/tools/macos-bin/platform-tools:$PWD/tools/macos-bin:$PATH
++# On a Mac: GNU timeout, flock and stat, and Android's platform-tools, from tools/macos-bin (as xl does)
++[ "$(uname)" = Darwin ] && PATH=$PWD/tools/macos-bin/platform-tools:$PWD/tools/macos-bin:$PATH
+ ARGS=$1; SECS=${2:-300}
+ # BASE_ARGS: the arguments the runner puts first (default: the reference phone's cores, clock and storage).
+ # Empty, as `make phone` sets it when there is a .config, they come from the configuration instead and are not doubled.
+@@ -38,7 +39,7 @@ android)
+ 	echo "== staying in the loader / fastboot"
+ 	for i in $(seq 1 60); do s=$(./xl state); [ "$s" != absent ] && break; sleep 5; done
+ 	if [ "$s" = android ]; then
+-		PATH=$PWD/tools/macos-bin/platform-tools:$PATH adb reboot bootloader >/dev/null 2>&1
++		adb reboot bootloader >/dev/null 2>&1
+ 		for i in $(seq 1 30); do s=$(./xl state); [ "$s" = fastboot ] && break; sleep 5; done
+ 	fi ;;
+ esac

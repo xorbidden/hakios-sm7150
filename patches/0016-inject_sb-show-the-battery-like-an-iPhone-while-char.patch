@@ -1,0 +1,69 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: xorbidden <xorbidden@proton.me>
+Date: Thu, 29 Oct 2026 13:37:15 +0100
+Subject: [PATCH] inject_sb: show the battery like an iPhone while charging
+
+Two differences from iOS on a charger:
+
+- SpringBoard's battery state came from the kernel's "charging" bit,
+  so a full battery on a charger, where the charger pauses, showed no
+  bolt. Report charging whenever the battery is present and a charger
+  is plugged, as an iPhone does.
+- The hook forced the percentage into the battery icon at all times.
+  On iOS 16 the number gives way to the bolt while a charger is in.
+  Keep forcing it on battery only.
+
+Seen on the Mi 9T: at 100 % on a charger the kernel reports charger=1
+charging=0, and the status bar showed "100" with no bolt.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ userland/src/inject_sb.c | 15 ++++++++++++---
+ 1 file changed, 12 insertions(+), 3 deletions(-)
+
+diff --git a/userland/src/inject_sb.c b/userland/src/inject_sb.c
+index e902ca4..a9cdac2 100644
+--- a/userland/src/inject_sb.c
++++ b/userland/src/inject_sb.c
+@@ -547,13 +547,20 @@ battery_state(id self, SEL sel)
+  * UIKitCore's status-bar view has its own presentation policy, separate from UIDevice. With the power
+  * source it is iOS's own again: the switch Battery Percentage in Settings > Battery, which the image
+  * turns on (SBShowBatteryPercentage in userland/var/mobile/Library/Preferences/com.apple.springboard.plist).
++ * As on an iPhone, the number gives way to the bolt while a charger is in (battery_view_should_show_bolt).
+  */
++static bool
++battery_view_charger_in(void)
++{
++	return sysctl_int("kern.hakios.battery_present") == 1 && sysctl_int("kern.hakios.battery_charger_present") == 1;
++}
++
+ static BOOL
+ battery_view_shows_percentage(id self, SEL sel)
+ {
+ 	int soc = sysctl_int("kern.hakios.battery_soc");
+ 
+-	if (soc >= 0 && soc <= 100 && !battery_power_source()) return YES;
++	if (soc >= 0 && soc <= 100 && !battery_power_source()) return !battery_view_charger_in();
+ 	return original_battery_view_shows_percentage ? original_battery_view_shows_percentage(self, sel) : NO;
+ }
+ 
+@@ -562,7 +569,8 @@ battery_view_set_shows_percentage(id self, SEL sel, BOOL shows)
+ {
+ 	int soc = sysctl_int("kern.hakios.battery_soc");
+ 
+-	original_battery_view_set_shows_percentage(self, sel, (soc >= 0 && soc <= 100 && !battery_power_source()) ? YES : shows);
++	original_battery_view_set_shows_percentage(self, sel,
++	    (soc >= 0 && soc <= 100 && !battery_power_source()) ? !battery_view_charger_in() : shows);
+ }
+ 
+ static BOOL
+@@ -572,7 +580,8 @@ battery_view_should_show_bolt(id self, SEL sel)
+ 	int present = sysctl_int("kern.hakios.battery_present");
+ 	int plugged = sysctl_int("kern.hakios.battery_charger_present");
+ 
+-	if (charging != -1 && present != -1 && plugged != -1 && !battery_power_source()) return charging && present && plugged;
++	/* (as on an iPhone: the bolt whenever a charger is in, also when the battery is full and the charger pauses) */
++	if (charging != -1 && present != -1 && plugged != -1 && !battery_power_source()) return present && plugged;
+ 	return original_battery_view_should_show_bolt ? original_battery_view_should_show_bolt(self, sel) : NO;
+ }
+ 

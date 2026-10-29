@@ -32,13 +32,15 @@ The rule for where a piece goes:
 | The kernel's log mirrored to the loader from kprintf's start | patch 0007 |
 | Kernel builds on Ubuntu (mawk, python3 only) | patches 0008, 0009 |
 | `make phone` on Linux (macOS shims only on macOS) | patch 0011 |
+| CamX V1.3.1 sensor modules for the camera tables | patch 0015 (tools/camsensor.py) |
+| The battery icon as on an iPhone: the bolt on a charger, the number on battery | patch 0016 (inject_sb.c) -- seen on the phone 2026-10-29 |
 | RPMh helpers for the SoC's drivers (LDOs, bus votes) on upstream's hakios_rsc_lock | `soc/drivers/core/hakios.rpmh.c` -- seen on the phone 2026-10-29 |
 | The panel (DSI command mode) with two framebuffers, via the panel interface and return hooks | `drivers/gpu/hakios.dsi.c` -- seen on the phone 2026-10-29 |
 | Touch: GT9886 in place of the common Goodix driver (`touchscreen=1`) | `drivers/input/hakios.gt9886.c`, `replaces GOODIX` -- seen on the phone 2026-10-29 |
 | Buttons: the PM6150's power-on block and PM6150L GPIO 2 | patch 0010 (common buttons driver: gen2 PON, `pmic_pon=`, `pmic_volume_up=`) -- seen on the phone 2026-10-29 |
 | Storage through the loader's block service | the common UFS driver, unchanged (`CONFIG_HAKIOS_UFS=y`, `ufs=2`) -- seen on the phone 2026-10-29 |
 | GPU: the Adreno 618 as the common Adreno driver's backend (`gpu=1`) | `soc/drivers/gpu/hakios.a618.c` + patch 0012 -- seen on the phone 2026-10-29 (21 steps, 610 MHz, Mesa draws) |
-| Audio: SM7150 DSP and its modem copy (`adsp=1 adsp_modem=1`), sound over MI2S (`sound=4`), mic on bolero 1.x (`mic=4`), TFA9874 speaker, battery (`battery=1`, common driver) | `soc/drivers/audio/` (`ADSP_SM7150`, `SOUND_SM7150`, `MIC_SM7150`, replacing the common ones), `drivers/audio/hakios.tfa9874.c` (`replaces SPEAKER`), patch 0013 (GUARD split out of SOUND) (built; not yet run) |
+| Audio: SM7150 DSP and its modem copy (`adsp=1 adsp_modem=1`), sound over MI2S (`sound=4`), mic on bolero 1.x (`mic=4`), TFA9874 speaker, battery (`battery=1`, common driver) | `soc/drivers/audio/` (`ADSP_SM7150`, `SOUND_SM7150`, `MIC_SM7150`, replacing the common ones), `drivers/audio/hakios.tfa9874.c` (`replaces SPEAKER`), patch 0013 (GUARD split out of SOUND) -- seen on the phone 2026-10-29: sound, microphone (Voice Memos), battery |
 | The phone's firmware in the images (TFA container, modem and Wi-Fi images, BT patch, sensors, camera tables) | `userland.sh` (`device_root`, `device_system`) + patch 0014 (userland/build.sh sources it) |
 | CPU clocks through the OSM (`cpufreq=1`) | `soc/drivers/power/hakios.cpufreq_osm.c`, `replaces CPUFREQ` -- seen on the phone 2026-10-29 |
 

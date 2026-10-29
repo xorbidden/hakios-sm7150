@@ -1,0 +1,130 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: xorbidden <xorbidden@proton.me>
+Date: Thu, 29 Oct 2026 13:27:02 +0100
+Subject: [PATCH] camsensor.py: read CamX "Parameter Parser V1.3.1" module
+ files
+
+Android 11's CamX (the Mi 9T's vendor image) writes sensor modules with
+Parameter Parser V1.3.1: the same structures as V3.0.1, but every field
+8 bytes wide and the symbol table and data pool at the entry points of
+0xa8 and 0xc0. Recognise that header and parse it into the same table
+the kernel's camera driver reads; V3.0.1 files go the way they did.
+
+The table writer is split out of parse() so both formats share it.
+
+Tested: the Mi 9T's four modules (IMX582, S5K3T2, and the others the
+ROM carries) produce tables; their main and front cameras worked in
+Camera.app with these tables on the old port.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ tools/camsensor.py | 81 ++++++++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 81 insertions(+)
+
+diff --git a/tools/camsensor.py b/tools/camsensor.py
+index acffe73..cef2221 100755
+--- a/tools/camsensor.py
++++ b/tools/camsensor.py
+@@ -55,6 +55,8 @@ def main():
+     if len(sys.argv) < 3:
+         sys.exit(__doc__)
+     data = open(sys.argv[1], 'rb').read()
++    if data.startswith(b'QTI Chromatix Header') and b'Parameter Parser V1.3.1' in data[:0x60]:
++        return write(*parse_v1(data))
+     if not data.startswith(b'QTI Chromatix Header') or b'Parameter Parser V3.0.1' not in data[:0x60]:
+         sys.exit('camsensor.py: not a module file of the kind known here')
+     syms, order, pool = symbols(data)
+@@ -108,7 +110,10 @@ def main():
+         if n < len(names):
+             tables.append((names[n], regsetting(data, pool, syms, value, sid)))
+     tables = mode_tables + tables
++    write(slave, address_bytes, data_bytes, id_address, chip_id, id_mask, lane_assign, power, modes, cfa, tables)
+ 
++
++def write(slave, address_bytes, data_bytes, id_address, chip_id, id_mask, lane_assign, power, modes, cfa, tables):
+     print(f'camsensor.py: slave {slave:#x}, id {chip_id:#x} at {id_address:#x} ({address_bytes}/{data_bytes} bytes, mask {id_mask:#x}), '
+           f'lane assignment {lane_assign:#x}')
+     for name in ('pwrup', 'pwrdn'):
+@@ -142,6 +147,82 @@ TYPES = {0: 'MCLK', 1: 'VANA', 2: 'VDIG', 3: 'VIO', 4: 'VAF', 8: 'RESET', 9: 'ST
+ CFA = {0: 'BGGR', 1: 'GBRG', 2: 'GRBG', 3: 'RGGB', 4: 'mono'}
+ 
+ 
++def parse_v1(data):
++    """A "Parameter Parser V1.3.1" module file (the Mi 9T's, Android 11's CamX): the same structures as V3.0.1's,
++    every field 8 bytes wide: a symbol is { id, name[32], kind, parent, offset, size } (72 bytes), the table of
++    symbols and the data at the entry points of 0xa8 and 0xc0 ({ offset, size } of 8 bytes each). The sensor
++    driver's data: slave address at 0x50, address and data type at 0x58 and 0x60 (1 a byte, 2 a word), the ID's
++    address, the ID and its mask at 0x68, 0x70, 0x78; a power setting { kind, value, delay in ms } of 24 bytes;
++    a resolution element of 272 bytes (colour filter, stream configurations' count and symbol, line length,
++    frame length, -, -, output pixel clock, -, -, frames a second as a double, lanes, C-PHY, -, settle count,
++    -, -, -, the settings' count and symbol); a stream configuration { vc, dt, x, y, width, height, ... } of
++    64 bytes; a register setting of 80 bytes, as V3.0.1's 40."""
++    table, table_size = struct.unpack_from('<QQ', data, 0xa8)
++    pool = struct.unpack_from('<Q', data, 0xc0)[0]
++    syms, order = {}, []
++    for at in range(table, table + table_size - 0x47, 0x48):
++        sid = struct.unpack_from('<Q', data, at)[0]
++        name = data[at + 8:at + 40].split(b'\0')[0].decode('latin1')
++        _, _, ref, size = struct.unpack_from('<4Q', data, at + 40)
++        syms[sid] = (name, ref, size)
++        order.append(sid)
++
++    def value(sid):
++        _, ref, size = syms[sid]
++        return data[pool + ref:pool + ref + size]
++
++    def q(sid):
++        v = value(sid)
++        return struct.unpack('<%dQ' % (len(v) // 8), v)
++
++    def regs(sid):
++        _, ref, size = syms[sid]
++        writes = []
++        for k in range(size // 80):
++            (has_slave, slave_sid, address, count, data_sid, address_bytes, data_bytes, operation, has_delay,
++             delay_sid) = struct.unpack_from('<10Q', data, pool + ref + 80 * k)
++            values = q(data_sid)
++            delay = q(delay_sid)[0] if has_delay else 0
++            for v in values[:max(count, 1)]:
++                writes.append((address, v, address_bytes, data_bytes, operation, delay))
++        return writes
++
++    d = struct.unpack_from('<6Q', data, pool + 0x50)
++    slave, address_bytes, data_bytes, id_address, chip_id, id_mask = d[0], d[1], d[2], d[3], d[4], d[5] & 0xffffffff
++    power = {}
++    for name, sid in zip(('pwrup', 'pwrdn'), [s for s in order if syms[s][0] == 'powerSetting'][:2]):
++        w = q(sid)
++        power[name] = [(w[i], w[i + 1], w[i + 2]) for i in range(0, len(w) - 2, 3)]
++    raw = value(next(s for s in order if syms[s][0] == 'resolutionData'))
++    modes, cfa, tables, mode_sids = [], [], [], set()
++    for k in range(len(raw) // 272):
++        w = struct.unpack_from('<34Q', raw, 272 * k)
++        fps = struct.unpack_from('<d', raw, 272 * k + 80)[0]
++        stream = q(w[2])[:8]
++        modes.append((stream[4], stream[5], stream[2], stream[3], w[11], w[12], w[14], w[7], w[3], w[4], int(fps * 1000),
++                      stream[1]))
++        cfa.append(CFA.get(w[0], str(w[0])))
++        tables.append(('res%d' % k, regs(w[19])))
++        mode_sids.add(w[19])
++    lane_sid = next((s for s in order if syms[s][0] == 'laneAssign'), None)
++    lane_assign = q(lane_sid)[0] & 0xffff if lane_sid is not None and syms[lane_sid][2] == 8 else 0
++    roles = {'regToRealGain': ['on', 'off', 'holdon', 'holdoff'], 'initSettings': ['init'], 'testPatternData': ['tpgoff', 'tpgon']}
++    after, used = '', {}
++    for sid in order:
++        name = syms[sid][0]
++        if name != 'regSetting':
++            if name not in ('slaveAddr', 'registerData', 'delayUs', '[0]'):
++                after = name
++            continue
++        if sid in mode_sids:
++            continue
++        n = used.get(after, 0)
++        used[after] = n + 1
++        if n < len(roles.get(after, [])):
++            tables.append((roles[after][n], regs(sid)))
++    return slave, address_bytes, data_bytes, id_address, chip_id, id_mask, lane_assign, power, modes, cfa, tables
++
++
+ def regsetting(data, pool, syms, value, sid):
+     """An array of register settings: (address, data, address bytes, data bytes, operation, delay in us) each."""
+     _, ref, size = syms[sid]

@@ -1,0 +1,69 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: xorbidden <xorbidden@proton.me>
+Date: Mon, 2 Nov 2026 11:07:54 +0100
+Subject: [PATCH] apple80211: give the run's summary without the console when
+ interrupts are off
+
+hakios_wifi_quiesce() gives the summary on the way back to the loader,
+on one processor with interrupts off. printf() there goes through the
+serial console, which panics: "Console I/O from interrupt-disabled
+context" (seen at the end of every davinci session with a
+loader_return_after).
+
+Write the lines into the loader's log directly, as the torch does, and
+through printf() only while interrupts are on.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ drivers/wifi/hakios.apple80211.c | 29 +++++++++++++++++++++++++++--
+ 1 file changed, 27 insertions(+), 2 deletions(-)
+
+diff --git a/drivers/wifi/hakios.apple80211.c b/drivers/wifi/hakios.apple80211.c
+index 62662f7..7c1678e 100644
+--- a/drivers/wifi/hakios.apple80211.c
++++ b/drivers/wifi/hakios.apple80211.c
+@@ -691,6 +691,31 @@ note(const struct apple80211req *request, bool is_set, int error)
+ 	lck_mtx_unlock(&apple80211_lock);
+ }
+ 
++extern void loader_log_putc(char c);
++extern boolean_t ml_get_interrupts_enabled(void);
++
++/*
++ * A line of the summary: into the loader's log directly, and to the console only while interrupts are on. The summary
++ * is also given on the way back to the loader (hakios_wifi_quiesce, one processor, interrupts off), where the
++ * console's printf panics: "Console I/O from interrupt-disabled context".
++ */
++static void __printflike(1, 2)
++summary_say(const char *format, ...)
++{
++	char line[200];
++	va_list list;
++
++	va_start(list, format);
++	vsnprintf(line, sizeof(line), format, list);
++	va_end(list);
++	for (const char *c = line; *c != 0; c++) {
++		loader_log_putc(*c);
++	}
++	if (ml_get_interrupts_enabled()) {
++		printf("%s", line);
++	}
++}
++
+ void
+ hakios_apple80211_summary(void)
+ {
+@@ -701,10 +726,10 @@ hakios_apple80211_summary(void)
+ 	}
+ 	said = true;
+ 	for (unsigned i = 0; i < kind_count; i++) {
+-		printf("apple80211: in this run: %s %d (%s) %u times, answered %u times%s", kinds[i].set ? "set" : "get", kinds[i].type,
++		summary_say("apple80211: in this run: %s %d (%s) %u times, answered %u times%s", kinds[i].set ? "set" : "get", kinds[i].type,
+ 		    type_name(kinds[i].type), kinds[i].times, kinds[i].answered, kinds[i].last_error == 0 ? "\n" : "");
+ 		if (kinds[i].last_error != 0) {
+-			printf("; the last refusal: %d%s\n", kinds[i].last_error, kinds[i].last_error == EOPNOTSUPP ? " (not built)" : "");
++			summary_say("; the last refusal: %d%s\n", kinds[i].last_error, kinds[i].last_error == EOPNOTSUPP ? " (not built)" : "");
+ 		}
+ 	}
+ }

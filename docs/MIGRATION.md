@@ -55,7 +55,7 @@ The rule for where a piece goes:
 
 The SoC's audio drivers are copies of the common ones with the SM7150's changes woven through (memory map, APCS
 doorbell, MI2S, bolero 1.x, FastRPC): they do not take upstream's later fixes to drivers/audio/ by themselves. When
-upstream changes one of those files, compare and carry the fix over (`git log upstream/hakios -- drivers/audio/`).
+upstream changes one of those files, compare and carry the fix over (`git log upstream/main -- drivers/audio/`).
 
 soc/drivers/wifi/hakios.wifi_sm7150.c is still the common WCN6750 driver with the WCN3990's parts made unconditional;
 its WCN6750 steps are never run here. To do: slim it down to the hakios_wifi_* calls the stack needs and the radio's

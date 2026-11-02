@@ -3,7 +3,7 @@
 iOS 16.5 on a Xiaomi Mi 9T (`davinci`, Snapdragon 730 / SM7150), started from a computer over USB with
 `fastboot boot`. **Nothing is written to the phone**: the UEFI, the loader, the kernel and the whole system live in
 RAM, and a reboot brings back Android. The port is this repository on top of the common HakiOS repository
-([oosexgang/hakios-xnu-kernel](https://github.com/oosexgang/hakios-xnu-kernel), branch `hakios`), which it does not
+([oosexgang/hakios-xnu-kernel](https://github.com/oosexgang/hakios-xnu-kernel), branch `main`), which it does not
 change in place: its changes to common files are the patches in `patches/`.
 
 ## What works
@@ -35,7 +35,7 @@ parts have been seen again since the move to this layout.
 ## Setting up
 
 ```sh
-git clone -b hakios https://github.com/oosexgang/hakios-xnu-kernel.git hakios && cd hakios
+git clone https://github.com/oosexgang/hakios-xnu-kernel.git hakios && cd hakios
 git clone https://github.com/xorbidden/hakios-sm7150.git devices/davinci
 tools/hakios-device.py sync redwood hakios-uefi   # the reference device and HakiOS's UEFI, as the manifest names them
 devices/davinci/patches/apply.sh                  # local branch `davinci`: upstream + this port's patches

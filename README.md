@@ -3,7 +3,7 @@
 One HakiOS device repository, in the layout of [hakios-sm7325](https://github.com/oosexgang/hakios-sm7325): the device
 (`device.conf`, `configs/`, its drivers, its UEFI platform, its firmware script) and its SoC family's layer (`soc/`: SM7150,
 "sdmmagpie"). It lives in `devices/davinci/` of a checkout of the common repository
-([oosexgang/hakios-xnu-kernel](https://github.com/oosexgang/hakios-xnu-kernel), branch `hakios`), which it never changes
+([oosexgang/hakios-xnu-kernel](https://github.com/oosexgang/hakios-xnu-kernel), branch `main`), which it never changes
 in place: everything the port needs that is not a file of its own is a patch in `patches/`.
 
 | What | Where |

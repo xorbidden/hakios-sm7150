@@ -2,7 +2,9 @@
 
 driver BT_WCN3990
 	file    bsd/dev/hakios.bt_wcn3990.c
+	file    bsd/dev/hakios.bt_uart.c
+	file    iokit/Kernel/hakios.bt_node.cpp iokitcpp
 	replaces BT
 	requires RPMH
-	help    the WCN3990's Bluetooth brought up step by step (bt=N; 5: supplies, UART, patch and NVM, reset), in place of
-	help    the common WCN6750 look; iOS does not use it yet. Needs fw-bt/ (userland.sh)
+	help    the WCN3990's Bluetooth brought up step by step (bt=N; 5: supplies, UART, patch and NVM, reset; 6: the
+	help    registry entry bluetoothd looks for), in place of the common WCN6750 look. Needs fw-bt/ (userland.sh)

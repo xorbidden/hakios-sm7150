@@ -37,6 +37,9 @@
  *              tag told 115200 baud and NOT in-band sleep, which nothing here speaks (the phone's
  *              file has it on); then HCI reset and the controller's address. On the phone: the
  *              patch is taken (946 segments, 22 s at 115200)
+ *   6  shows   the controller to Darwin: the registry entry "bluetooth" bluetoothd looks for, as the iPhone X's device
+ *              tree has it (hakios.bt_node.cpp), and the serial port it and BlueTool speak HCI through,
+ *              /dev/uart.bluetooth (hakios.bt_uart.c)
  * Steps 4 on run on a thread of their own: the download takes some 20 s at 115200.
  *
  * Register layouts: Linux drivers/clk/qcom/gcc-sm7150.c, include/linux/soc/qcom/geni-se.h,
@@ -86,6 +89,7 @@ extern vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);
 #define GPIO_IO(base, n)        (GPIO_CFG(base, n) + 4)
 
 static uint32_t wanted;
+static uint8_t bd_addr[6];      /* the controller's address, as HCI_Read_BD_ADDR gives it (step 5) */
 static vm_offset_t gcc, se, pins;
 
 static inline uint32_t
@@ -795,6 +799,7 @@ firmware(void)
 	if (got >= 13 && ev[1] == 0x0e && ev[6] == 0) {
 		printf("bt: 5: THE CONTROLLER IS UP: patched, reset; its address %02x:%02x:%02x:%02x:%02x:%02x\n", ev[12], ev[11], ev[10],
 		    ev[9], ev[8], ev[7]);
+		memcpy(bd_addr, ev + 7, sizeof(bd_addr));
 		done = true;
 	} else {
 		say_bytes("the address's answer", ev, got);
@@ -814,11 +819,39 @@ out:
 	return done;
 }
 
+/* ---- step 6: the controller shown to Darwin ------------------------------------------------------------ */
+
+extern void HakiosBluetoothNodeStart(const uint8_t *address);  /* hakios.bt_node.cpp */
+extern void hakios_bt_uart_start(void);                         /* hakios.bt_uart.c */
+
+/* the UART for the port Darwin talks HCI through (hakios.bt_uart.c), once the steps above have done with it */
+int
+hakios_bt_uart_send(const uint8_t *bytes, uint32_t length)
+{
+	return uart_send(bytes, length);
+}
+
+/* what has come in; waits a millisecond when nothing has */
+uint32_t
+hakios_bt_uart_receive(uint8_t *bytes, uint32_t most)
+{
+	return uart_receive(bytes, most, 0);
+}
+
+/* the registry entry bluetoothd looks for (IOServiceNameMatching("bluetooth")), with the address, and the port */
+static bool
+node(void)
+{
+	HakiosBluetoothNodeStart(bd_addr);
+	hakios_bt_uart_start();
+	return true;
+}
+
 /* steps 4 on, beside the system's start */
 static void
 later_steps(__unused void *parameter, __unused wait_result_t wait)
 {
-	static bool (*const steps[])(void) = { chip_hello, firmware };
+	static bool (*const steps[])(void) = { chip_hello, firmware, node };
 
 	for (unsigned step = 4; step <= wanted && step - 4 < sizeof(steps) / sizeof(steps[0]); step++) {
 		if (!steps[step - 4]()) {

@@ -46,4 +46,36 @@ device_system() {
 		rm -rf sysroot/fw/hexagonfs
 		cp -R ../fw-sensors/hexagonfs ../fw-sensors/hexagonfs.idx sysroot/fw/
 	fi
+	# BlueTool's scripts (BT_JOBS=1)
+	device_bluetool
+}
+
+# Darwin's Bluetooth daemon and its helper, with BT_JOBS=1 (the kernel's side of iOS's Bluetooth is not done yet: without
+# it bluetoothd finds no controller; the image is the same otherwise). On the iPhone X the controller is on uart1, H4 at
+# 3 Mbaud (/dev/uart.bluetooth); BlueTool sets it up for bluetoothd.
+[ "${BT_JOBS-0}" != 0 ] && DEVICE_JOBS="${DEVICE_JOBS-} com.apple.bluetoothd com.apple.BlueTool"
+# ... and BlueTool told it is a vendor's install, for it to read our scripts below (src/inject_bt.c)
+[ "${BT_JOBS-0}" != 0 ] && DEVICE_INJECT="${DEVICE_INJECT-}/redwood/lib/libhakios.bt.dylib BlueTool"
+
+# The device's libraries for the small image's lib/ (build.sh calls this before it writes the injection list)
+device_libraries() {
+	if [ "${BT_JOBS-0}" != 0 ]; then
+		$DYN -dynamiclib -install_name /redwood/lib/libhakios.bt.dylib -framework CoreFoundation -lMobileGestalt \
+			-o obj/libhakios.bt.dylib ../devices/davinci/userland/src/inject_bt.c
+		cp obj/libhakios.bt.dylib root/lib/
+	fi
+}
+
+# BlueTool's scripts for this phone, with BT_JOBS=1: its own for the iPhone X download a Broadcom chip's firmware;
+# the WCN3990 is a Qualcomm one, patched and reset by the kernel (bt=6), so they only open the port (-D: the kernel
+# control com.apple.uart.bluetooth, hakios.bt_uart.c) and reset it.
+# BlueTool looks for /etc/bluetool/<hardware model>.<sequence>.script, then <platform hash>.<sequence>.script.
+device_bluetool() {
+	[ "${BT_JOBS-0}" != 0 ] || return 0
+	mkdir -p sysroot/private/etc/bluetool
+	for name in D22AP fd079b298144a7deb4d7c87fef3eb474d8f0e7eb; do
+		for sequence in boot init; do
+			printf 'device -D -s 115200\nhci reset\n' > sysroot/private/etc/bluetool/$name.$sequence.script
+		done
+	done
 }

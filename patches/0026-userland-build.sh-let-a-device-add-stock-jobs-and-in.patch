@@ -1,0 +1,54 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: xorbidden <xorbidden@proton.me>
+Date: Mon, 2 Nov 2026 13:33:11 +0100
+Subject: [PATCH] userland/build.sh: let a device add stock jobs and injected
+ libraries
+
+A device's userland.sh may now set DEVICE_JOBS (stock launchd jobs its
+hardware is for, added to DARWIN_JOBS) and DEVICE_INJECT ("LIBRARY
+NAME..." lines added to INJECT), and define device_libraries, called
+before inject.conf is written, to build those libraries into root/lib.
+
+davinci uses them for Bluetooth: bluetoothd and BlueTool, and a library
+that lets BlueTool read the phone's own setup scripts.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ userland/build.sh | 10 ++++++++++
+ 1 file changed, 10 insertions(+)
+
+diff --git a/userland/build.sh b/userland/build.sh
+index 9effc11..c21bc97 100755
+--- a/userland/build.sh
++++ b/userland/build.sh
+@@ -125,6 +125,9 @@ DARWIN_JOBS=${JOBS-"
+ # (Count a QEMU run log with its duplicate lines removed: run-darwin.sh prints launchd's log twice.)
+ # WIFID=0 leaves it out.
+ [ "${WIFID-1}" != 0 ] && DARWIN_JOBS="$DARWIN_JOBS com.apple.wifid"
++# A device's own additions to that list: DEVICE_JOBS, which ../devices/$DEVICE/userland.sh may set (stock jobs the
++# device's hardware is for, as wifid is for the radio).
++[ -n "${DEVICE_JOBS-}" ] && DARWIN_JOBS="$DARWIN_JOBS $DEVICE_JOBS"
+ # The programs (file names) started with a library of ours inside them: "LIBRARY NAME..." per line
+ # (src/inject.c is libhakios.dylib, src/inject_sb.c is libhakios.sb.dylib, src/inject_media.c is
+ # libhakios.media.dylib).
+@@ -139,6 +142,10 @@ INJECT=${INJECT-"/redwood/lib/libhakios.dylib backboardd containermanagerd conta
+ /redwood/lib/libhakios.media.dylib mediaserverd
+ /redwood/lib/libhakios.app.dylib Sileo
+ /redwood/lib/libhakios.tweaks.dylib Preferences"}
++# A device's own: DEVICE_INJECT, "LIBRARY NAME..." lines as above, which ../devices/$DEVICE/userland.sh may set; it
++# builds those libraries into root/lib/ in its device_libraries (called before the list is written).
++[ -n "${DEVICE_INJECT-}" ] && INJECT="$INJECT
++$DEVICE_INJECT"
+ mkdir -p obj
+ 
+ if [ -z "$PREBUILT" ] && ! command -v ld64 >/dev/null; then PREBUILT=1; fi
+@@ -359,6 +366,9 @@ if [ -d $DARWIN/rootfs/usr/lib ]; then
+ 		[ -f obj/air_run ] && cp obj/air_run root/bin/
+ 		[ "$GL" = test ] || cp obj/libhakios.gl.dylib root/lib/
+ 	fi
++	if declare -F device_libraries >/dev/null; then
++		device_libraries
++	fi
+ 	# a program is not started with a library that is not there: it would not start at all
+ 	echo "$INJECT" | while read -r library names; do
+ 		# a /redwood/lib library only if it was actually built; any other path (e.g. a tweak loader

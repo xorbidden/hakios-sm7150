@@ -89,6 +89,7 @@ extern vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);
 #define GPIO_IO(base, n)        (GPIO_CFG(base, n) + 4)
 
 static uint32_t wanted;
+static uint32_t bt_baud = 115200;       /* boot-arg bt_baud=3200000: the link's speed after the chip's first answer */
 static uint8_t bd_addr[6];      /* the controller's address, as HCI_Read_BD_ADDR gives it (step 5) */
 static vm_offset_t gcc, se, pins;
 
@@ -212,6 +213,29 @@ power(void)
 #define RCG_CMD_UPDATE          (1u << 0)
 #define RCG_CMD_ROOT_OFF        (1u << 31)
 
+static uint32_t se_clk_hz;              /* (below) */
+
+/* The engine's clock source at 300 MHz x m/n (GPLL0's even output): clk-rcg2's way -- M, N as ~(n - m), D as ~n
+ * (half duty), the source and the pre-divider, dual edge; then UPDATE */
+static bool
+engine_source(uint32_t m, uint32_t n)
+{
+	wr(gcc + RCG_M, m);
+	wr(gcc + RCG_N, ~(n - m) & 0xffff);
+	wr(gcc + RCG_D, ~n & 0xffff);
+	wr(gcc + RCG_CFG, 6u << 8 | 1u /* pre-divider 1: 2 * 1 - 1 */ | 2u << 12);
+	wr(gcc + RCG_CMD, rd(gcc + RCG_CMD) | RCG_CMD_UPDATE);
+	for (unsigned ms = 0; rd(gcc + RCG_CMD) & RCG_CMD_UPDATE; ms++) {
+		if (ms == 100) {
+			printf("bt: THE ENGINE'S CLOCK SOURCE DID NOT TAKE THE UPDATE (cmd %#x)\n", rd(gcc + RCG_CMD));
+			return false;
+		}
+		sleep_ms(1);
+	}
+	se_clk_hz = (uint32_t)(300000000ull * m / n);
+	return true;
+}
+
 static bool
 clocks_and_pins(void)
 {
@@ -229,20 +253,9 @@ clocks_and_pins(void)
 		    rd(GPIO_CFG(pins, lines[i].pin)));
 		wr(GPIO_CFG(pins, lines[i].pin), cfg);
 	}
-	/* clk-rcg2's way: M, N as ~(n - m), D as ~n (half duty), the source and the pre-divider, dual edge; then UPDATE */
-	cfg = 6u << 8 | 1u /* pre-divider 1: 2 * 1 - 1 */ | 2u << 12;
-	printf("bt: 3: about to write the engine's clock source: m %u, n %u, cfg %#x (GPLL0 even, dual edge), then update\n", m, n, cfg);
-	wr(gcc + RCG_M, m);
-	wr(gcc + RCG_N, ~(n - m) & 0xffff);
-	wr(gcc + RCG_D, ~n & 0xffff);
-	wr(gcc + RCG_CFG, cfg);
-	wr(gcc + RCG_CMD, rd(gcc + RCG_CMD) | RCG_CMD_UPDATE);
-	for (unsigned ms = 0; rd(gcc + RCG_CMD) & RCG_CMD_UPDATE; ms++) {
-		if (ms == 100) {
-			printf("bt: 3: THE CLOCK SOURCE DID NOT TAKE THE UPDATE (cmd %#x)\n", rd(gcc + RCG_CMD));
-			return false;
-		}
-		sleep_ms(1);
+	printf("bt: 3: about to write the engine's clock source: m %u, n %u (GPLL0 even, dual edge), then update\n", m, n);
+	if (!engine_source(m, n)) {
+		return false;
 	}
 	printf("bt: 3: about to vote for the engine's clocks: %#x |= %#x\n", rd(gcc + GCC_VOTE), votes);
 	wr(gcc + GCC_VOTE, rd(gcc + GCC_VOTE) | votes);
@@ -324,14 +337,14 @@ clocks_and_pins(void)
 #define RX_LAST                 (1u << 31)
 #define RX_LAST_VALID(st)       ((st) >> 28 & 7)
 #define QUP_WRAP0_PHYS          0x008c0000UL    /* dt: qupv3_0 (qcom,wrapper-core): its hardware version at +4 */
-#define SE_CLK_HZ               7372800u
+static uint32_t se_clk_hz = 7372800;       /* the engine's clock (step 3: 300 MHz x 384/15625; 102.4 MHz for bt_baud) */
 
 static uint32_t sampling = 32;
 
 static void
 uart_baud(uint32_t baud)
 {
-	uint32_t div = (SE_CLK_HZ + baud * sampling - 1) / (baud * sampling), cfg = div << 4 | 1;   /* SER_CLK_EN */
+	uint32_t div = (se_clk_hz + baud * sampling - 1) / (baud * sampling), cfg = div << 4 | 1;   /* SER_CLK_EN */
 	bool reading = (rd(se + GENI_STATUS) & S_GENI_CMD_ACTIVE) != 0;
 
 	/*
@@ -357,7 +370,7 @@ uart_baud(uint32_t baud)
 	if (reading) {
 		wr(se + SE_GENI_S_CMD0, UART_START_READ);
 	}
-	printf("bt: 4: %u baud: divider %u (%u Hz / %u x %u), clock cfg %#x\n", baud, div, SE_CLK_HZ, baud, sampling, cfg);
+	printf("bt: 4: %u baud: divider %u (%u Hz / %u x %u), clock cfg %#x\n", baud, div, se_clk_hz, baud, sampling, cfg);
 }
 
 static void
@@ -735,9 +748,53 @@ download(const char *name, const uint8_t *data, uint32_t size, bool skip)
 	return true;
 }
 
+/*
+ * bt_baud=3200000: the link at the iPhone X's speed (its transport-speed; A2DP needs more than 115200's 11 KB/s),
+ * as hci_qca.c's qca_set_speed() does it for a WCN399x: QCA's vendor command 0xfc48 with the rate's index (17:
+ * 3.2 Mbaud), our side changed after it (the engine at 102.4 MHz, 32 samples a bit: Linux's sm7150 table, 300 MHz x
+ * 128/375), whatever comes meanwhile dropped, and the version asked again at the new speed. If it does not answer,
+ * our side back at 115200 and the run goes on as without it.
+ */
+static void
+fast_speed(void)
+{
+	static const uint8_t set[] = { 0x01, 0x48, 0xfc, 0x01, 17 };
+	static const uint8_t index = 0x19;
+	uint8_t ev[64], junk[64];
+	uint32_t got;
+
+	if (bt_baud != 3200000) {
+		return;
+	}
+	printf("bt: 5: to 3.2 Mbaud: QCA's set-baud-rate command, then our side\n");
+	if (uart_send(set, sizeof(set)) != 0) {
+		printf("bt: 5: the set-baud-rate command NOT SENT; the link stays at 115200\n");
+		return;
+	}
+	sleep_ms(10);
+	if (!engine_source(128, 375)) {
+		return;
+	}
+	uart_baud(3200000);
+	sleep_ms(100);
+	got = uart_receive(junk, sizeof(junk), 50);    /* (the chip's own answer, at either speed) */
+	say_bytes("what came while the speed changed", junk, got);
+	got = command(0xfc00, &index, 1, ev, sizeof(ev), 500);
+	if (got >= 7 && ev[0] == 0x04) {
+		printf("bt: 5: THE LINK RUNS AT 3.2 MBAUD (the version answered: %u bytes)\n", got);
+		return;
+	}
+	say_bytes("the version's answer at 3.2 Mbaud", ev, got);
+	printf("bt: 5: NO ANSWER AT 3.2 MBAUD: our side back at 115200\n");
+	bt_baud = 115200;
+	(void)engine_source(384, 15625);
+	uart_baud(115200);
+}
+
 static bool
 firmware(void)
 {
+	fast_speed();
 	const uint8_t *patch = NULL, *nvm_file = NULL;
 	uint8_t *nvm = NULL, ev[260];
 	uint64_t patch_size = 0, nvm_size = 0;
@@ -775,10 +832,10 @@ firmware(void)
 		uint8_t *data = nvm + at + 12;
 
 		if (tag == 17 && len >= 3) {            /* EDL_TAG_ID_HCI: the transport */
-			printf("bt: 5: the NVM's transport tag: %02x %02x %02x: in-band sleep %s, baud set to 115200 (was index %u)\n",
-			    data[0], data[1], data[2], data[0] & 0x80 ? "TAKEN OUT (the file has it on)" : "off", data[2]);
+			printf("bt: 5: the NVM's transport tag: %02x %02x %02x: in-band sleep %s, baud set to %u (was index %u)\n",
+			    data[0], data[1], data[2], data[0] & 0x80 ? "TAKEN OUT (the file has it on)" : "off", bt_baud, data[2]);
 			data[0] &= 0x7f;                /* no in-band sleep: its wake and sleep bytes are not spoken here */
-			data[2] = 0;                    /* QCA_BAUDRATE_115200 */
+			data[2] = bt_baud == 3200000 ? 17 : 0;  /* QCA_BAUDRATE_3200000 or QCA_BAUDRATE_115200 */
 		} else if (tag == 2 && len == 6) {      /* EDL_TAG_ID_BD_ADDR */
 			printf("bt: 5: the NVM has an address\n");
 		}
@@ -895,6 +952,7 @@ bt_init(void)
 	uint64_t deadline;
 
 	PE_parse_boot_argn("bt", &wanted, sizeof(wanted));
+	PE_parse_boot_argn("bt_baud", &bt_baud, sizeof(bt_baud));
 	if (wanted == 0) {
 		return;
 	}

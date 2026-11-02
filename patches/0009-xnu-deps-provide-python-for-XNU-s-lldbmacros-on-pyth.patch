@@ -20,10 +20,10 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
  create mode 100755 xnu-deps/host/bin/python
 
 diff --git a/.gitignore b/.gitignore
-index 51680ca..1b574b0 100644
+index d9687e1..80d4f63 100644
 --- a/.gitignore
 +++ b/.gitignore
-@@ -80,6 +80,7 @@ __pycache__/
+@@ -85,6 +85,7 @@ __pycache__/
  !/xnu-deps/host/bin/iig
  !/xnu-deps/host/bin/install
  !/xnu-deps/host/bin/plutil

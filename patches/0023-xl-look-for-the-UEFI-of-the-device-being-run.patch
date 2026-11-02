@@ -1,0 +1,27 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: xorbidden <xorbidden@proton.me>
+Date: Mon, 2 Nov 2026 10:10:55 +0100
+Subject: [PATCH] xl: look for the UEFI of the device being run
+
+firmware() looked for redwood's SILICIUM_UEFI.fd only, so any other
+device with a UEFI build (davinci) was sent through U-Boot. Look under
+$DEVICE, which the Makefile exports, with redwood still the default.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ xl | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/xl b/xl
+index 490ed44..0342b9a 100755
+--- a/xl
++++ b/xl
+@@ -128,7 +128,7 @@ firmware() {
+ 	case "${XL_FIRMWARE:-}" in
+ 	u-boot|silicium) echo "$XL_FIRMWARE"; return ;;
+ 	esac
+-	if [ -f Mu-Silicium/Build/redwoodPkg/RELEASE_CLANGPDB/FV/SILICIUM_UEFI.fd ] || [ -f devices/redwood/prebuilt/SILICIUM_UEFI.fd ]; then
++	if [ -f Mu-Silicium/Build/${DEVICE:-redwood}Pkg/RELEASE_CLANGPDB/FV/SILICIUM_UEFI.fd ] || [ -f devices/${DEVICE:-redwood}/prebuilt/SILICIUM_UEFI.fd ]; then
+ 		echo silicium
+ 	else
+ 		echo u-boot

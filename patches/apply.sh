@@ -1,5 +1,5 @@
 #!/bin/sh
-# devices/davinci/patches/apply.sh [BASE]: the common repository as BASE (default: its remote branch `hakios`) and, on top,
+# devices/davinci/patches/apply.sh [BASE]: the common repository as BASE (default: its remote branch `main`) and, on top,
 # the changes to it this port still needs (the NNNN-*.patch here, in order), as commits of a local branch `davinci`.
 #
 # Run it after `git fetch` of the common repository to take its updates: the branch is made again from the new BASE.
@@ -18,9 +18,9 @@ if [ $# -ge 1 ]; then
 else
 	base=
 	for r in upstream origin; do
-		if git rev-parse -q --verify "refs/remotes/$r/hakios" >/dev/null; then base=$r/hakios; break; fi
+		if git rev-parse -q --verify "refs/remotes/$r/main" >/dev/null; then base=$r/main; break; fi
 	done
-	[ -n "$base" ] || { echo "apply.sh: no remote branch hakios; give the base" >&2; exit 1; }
+	[ -n "$base" ] || { echo "apply.sh: no remote branch main; give the base" >&2; exit 1; }
 fi
 git checkout -q -B davinci "$base"
 set -- "$here"/[0-9][0-9][0-9][0-9]-*.patch

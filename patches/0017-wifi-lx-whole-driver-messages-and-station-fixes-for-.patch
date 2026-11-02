@@ -73,7 +73,7 @@ index 0625ebb..739f272 100644
  void	lx_pause_ms(unsigned ms);	/* lx_base.c: sleep */
  void	lx_mark(const char *what);	/* lx_base.c: a point reached, said and waited at if the kernel was asked to */
 diff --git a/wifi/lx/src/lx_80211.c b/wifi/lx/src/lx_80211.c
-index a9c94da..1d33b18 100644
+index 0941945..172eaff 100644
 --- a/wifi/lx/src/lx_80211.c
 +++ b/wifi/lx/src/lx_80211.c
 @@ -108,6 +108,13 @@ struct lx_radio {

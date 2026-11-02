@@ -58,10 +58,10 @@ index ed5ca7f..0a97ef5 100644
  /* the ends of a run (loader_return.c, the guards), which have no header of their own */
  void hakios_adsp_stop(void);
 diff --git a/tools/hakios-config-test.py b/tools/hakios-config-test.py
-index 159cea7..b428900 100755
+index 8bf3c45..fa07654 100755
 --- a/tools/hakios-config-test.py
 +++ b/tools/hakios-config-test.py
-@@ -231,10 +231,11 @@ try:
+@@ -235,10 +235,11 @@ try:
  
      # the drivers: compiled in, not arguments
      check("redwood builds every driver, and they give no argument",

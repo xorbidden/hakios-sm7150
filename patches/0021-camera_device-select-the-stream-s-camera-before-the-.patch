@@ -20,7 +20,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
  1 file changed, 9 insertions(+)
 
 diff --git a/userland/src/camera_device.c b/userland/src/camera_device.c
-index 24b1d6b..e6aaeb0 100644
+index 6181c1b..01c3bef 100644
 --- a/userland/src/camera_device.c
 +++ b/userland/src/camera_device.c
 @@ -1324,6 +1324,15 @@ worker(void *context)

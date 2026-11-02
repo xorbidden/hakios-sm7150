@@ -15,10 +15,10 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
  1 file changed, 8 insertions(+), 5 deletions(-)
 
 diff --git a/userland/build.sh b/userland/build.sh
-index b8d55eb..0bdc038 100755
+index e0020ba..9effc11 100755
 --- a/userland/build.sh
 +++ b/userland/build.sh
-@@ -402,11 +402,14 @@ if [ -f ../fw-wifi/wpss.mdt ]; then
+@@ -442,11 +442,14 @@ if [ -f ../fw-wifi/wpss.mdt ]; then
  	for f in bd_m20gl.elf regdb_xiaomi.bin; do
  		[ -f ../fw-wifi/qca6750/$f ] && install -m 0644 ../fw-wifi/qca6750/$f root/fw/
  	done

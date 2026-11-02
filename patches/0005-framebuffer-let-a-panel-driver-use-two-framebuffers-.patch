@@ -24,51 +24,51 @@ Tested on the Mi 9T: no tearing, SpringBoard at 60 Hz.
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 ---
  configs/boot-args.lst                         |   1 +
- configs/common_defconfig                      |   7 +-
+ configs/common_defconfig                      |  42 ++++-
  configs/symbols.tsv                           |   1 +
  docs/boot-args.md                             |   5 +-
  xnu/files/iokit/Kernel/GenericARMPE.cpp       |   1 +
  xnu/files/iokit/Kernel/MiniDrivers.h          |   2 +
- .../iokit/Kernel/MiniIOMobileFramebuffer.cpp  | 156 +++++++++++++++++-
+ .../iokit/Kernel/MiniIOMobileFramebuffer.cpp  | 157 +++++++++++++++++-
  xnu/files/iokit/Kernel/MiniIOSurface.cpp      |  17 ++
  xnu/files/iokit/Kernel/MiniIOSurface.h        |   2 +
- 9 files changed, 179 insertions(+), 13 deletions(-)
+ 9 files changed, 214 insertions(+), 14 deletions(-)
 
 diff --git a/configs/boot-args.lst b/configs/boot-args.lst
-index bc8e9c6..7e6d3eb 100644
+index 7af859d..79e8472 100644
 --- a/configs/boot-args.lst
 +++ b/configs/boot-args.lst
-@@ -90,6 +90,7 @@ epoch	k
- fb_beat	k
+@@ -93,6 +93,7 @@ fb_beat	k
+ fb_ca_hz	k
  fb_diff	k
  fb_filter	k
 +fb_flip	k
  fb_hz	k
- fb_queue	k
- fb_threads	k
+ fb_measure	k
+ fb_pri	k
 diff --git a/configs/common_defconfig b/configs/common_defconfig
-index 3d8b427..379e4a7 100644
+index 08ae448..828335c 100644
 --- a/configs/common_defconfig
 +++ b/configs/common_defconfig
 @@ -2,7 +2,7 @@
  # HakiOS common defconfig: every setting there is, with what it does.
  # Made by tools/hakios-config.py listing common -o <this file>; the values are the ones that file sets, and tests/CI check that it names every symbol.
  #
--# 341 symbols in 18 groups; 34 are set, 25 of them drivers built in.
-+# 342 symbols in 18 groups; 34 are set, 25 of them drivers built in.
+-# 350 symbols in 18 groups; 34 are set, 25 of them drivers built in.
++# 362 symbols in 18 groups; 34 are set, 25 of them drivers built in.
  #
  
  #
-@@ -329,7 +329,7 @@ CONFIG_TOUCHSCREEN=y
+@@ -335,7 +335,7 @@ CONFIG_TOUCHSCREEN=y
  # CONFIG_VIRTIO_INPUT is not set
  
  #
--# GPU and display (68)
-+# GPU and display (69)
+-# GPU and display (74)
++# GPU and display (75)
  #
  
  # rendering on Adreno (an image built with GL=1; the GPU's firmware from your phone) [needs fw-gpu/ from the phone]
-@@ -383,6 +383,9 @@ CONFIG_GPU=y
+@@ -392,6 +392,9 @@ CONFIG_GPU=y
  # the picture is scaled to the panel nearest neighbour, as it once was
  # CONFIG_FB_FILTER is not set
  
@@ -78,60 +78,116 @@ index 3d8b427..379e4a7 100644
  # read by MiniIOMobileFramebuffer.cpp (kernel)
  # CONFIG_FB_HZ is not set
  
+@@ -1075,7 +1078,7 @@ CONFIG_MODEM_AGAIN=y
+ # CONFIG_UFS_PROBE is not set
+ 
+ #
+-# User space (14)
++# User space (25)
+ #
+ 
+ # read by inject_sb.c (user space)
+@@ -1087,6 +1090,12 @@ CONFIG_MODEM_AGAIN=y
+ # the second look this many seconds later (0: no second look; 30)
+ # CONFIG_BT_AGAIN is not set
+ 
++# read by inject.c (user space)
++# CONFIG_CA_METALLIB is not set
++
++# read by HakiosMetalCA.m (user space)
++# CONFIG_CA_PROF is not set
++
+ # CoreAnimation's frame clock from the display driver's refresh notifications
+ # CONFIG_CA_VBL is not set
+ 
+@@ -1111,6 +1120,33 @@ CONFIG_MODEM_AGAIN=y
+ # the renderer is made to answer that it has those functions after all
+ # CONFIG_GLYES is not set
+ 
++# read by HakiosMetalCA.m (user space)
++# CONFIG_METAL_ALL is not set
++
++# read by HakiosMetalCA.m (user space)
++# CONFIG_METAL_DUMP is not set
++
++# each draw of a sysmem pass timed alone, by program (only sysmem passes are: without metal_gmem=1)
++# CONFIG_METAL_FPS is not set
++
++# read by HakiosMetalCA.m (user space)
++# CONFIG_METAL_GMEM is not set
++
++# GMEM for a pass whose like had at least N draws in the frame before (hakios_metal_cb_set_gmem_min_draws), sysmem for ...
++# CONFIG_METAL_GMEM_DRAWS is not set
++
++# read by HakiosMetalCA.m (user space)
++# CONFIG_METAL_GMEM_OFF is not set
++
++# read by HakiosMetalCA.m (user space)
++# CONFIG_METAL_SKIP is not set
++
++# read by HakiosMetalCA.m (user space)
++# CONFIG_METAL_TRACE is not set
++
++# read by inject.c (user space)
++# CONFIG_METAL_WATCH is not set
++
+ # the root is to be the Darwin root volume on /dev/DEV -- the phone's flash, read only
+ # CONFIG_ROOT_APFS is not set
+ 
 diff --git a/configs/symbols.tsv b/configs/symbols.tsv
-index 6a3244b..f76afd9 100644
+index 31ed41b..e794a6a 100644
 --- a/configs/symbols.tsv
 +++ b/configs/symbols.tsv
-@@ -81,6 +81,7 @@ DISPLAY_PROBE	arg	display_probe	GPU and display	k	hakios.adreno.c	before any ste
- FB_BEAT	arg	fb_beat	GPU and display	k	MiniIOMobileFramebuffer.cpp	
+@@ -84,6 +84,7 @@ FB_BEAT	arg	fb_beat	GPU and display	k	MiniIOMobileFramebuffer.cpp
+ FB_CA_HZ	arg	fb_ca_hz	GPU and display	k	MiniIOMobileFramebuffer.cpp	the refresh rate told to CoreAnimation (IOMFBDisplayRefresh) when it is not to be fb_hz's
  FB_DIFF	arg	fb_diff	GPU and display	k	MiniIOMobileFramebuffer.cpp	which pixels of the panel each frame changed (it costs: the panel's memory is slow to read)
  FB_FILTER	arg	fb_filter	GPU and display	k	MiniIOMobileFramebuffer.cpp	the picture is scaled to the panel nearest neighbour, as it once was
 +FB_FLIP	arg	fb_flip	GPU and display	k	MiniIOMobileFramebuffer.cpp	one framebuffer, drawn into while the panel is sent from it (as before; it tears)
  FB_HZ	arg	fb_hz	GPU and display	k	MiniIOMobileFramebuffer.cpp	
- FB_QUEUE	arg	fb_queue	GPU and display	k	MiniIOMobileFramebuffer.cpp	
- FB_THREADS	arg	fb_threads	GPU and display	k	MiniIOMobileFramebuffer.cpp	
+ FB_MEASURE	arg	fb_measure	GPU and display	k	MiniIOMobileFramebuffer.cpp	how often the panel is really refreshed
+ FB_PRI	arg	fb_pri	GPU and display	k	MiniIOMobileFramebuffer.cpp	
 diff --git a/docs/boot-args.md b/docs/boot-args.md
-index df76645..15b8889 100644
+index 16bc0fd..e158f83 100644
 --- a/docs/boot-args.md
 +++ b/docs/boot-args.md
 @@ -2,13 +2,13 @@
  
  Made by `tools/boot-args.py --markdown`; CI fails if it is out of date with the source (`tools/boot-args.py --check`).
  
--Every argument that the kernel, the loader or user space of this port reads, and which file reads it. **319 arguments**: 270 read by the kernel, 14 by the loader, 45 by user space (one is read in more than one place).
-+Every argument that the kernel, the loader or user space of this port reads, and which file reads it. **320 arguments**: 271 read by the kernel, 14 by the loader, 45 by user space (one is read in more than one place).
+-Every argument that the kernel, the loader or user space of this port reads, and which file reads it. **339 arguments**: 276 read by the kernel, 14 by the loader, 59 by user space (one is read in more than one place).
++Every argument that the kernel, the loader or user space of this port reads, and which file reads it. **340 arguments**: 277 read by the kernel, 14 by the loader, 59 by user space (one is read in more than one place).
  
  This is a catalogue of what exists and who reads it, not a manual. What an argument means is in the head of the file that reads it. The stable switches have a symbol in the configuration (`tools/hakios-config.py help SYMBOL`, `docs/configs.md`); the rest are the knobs of bring-up (a driver's steps, pauses, traces, test modes) and can change with the driver. Any of them can be given in a configuration with `CONFIG_BOOTARGS="name=value ..."`, which checks that each name is in this list.
  
  Layers: **K** the kernel, **L** the loader, **U** user space (through `sysctl kern.bootargs`).
  
--## GPU and display (68)
-+## GPU and display (69)
+-## GPU and display (74)
++## GPU and display (75)
  
  | Argument | Layer | Read by | Configuration | Set by |
  |---|---|---|---|---|
-@@ -28,6 +28,7 @@ Layers: **K** the kernel, **L** the loader, **U** user space (through `sysctl ke
- | `fb_beat` | K | `MiniIOMobileFramebuffer.cpp` | `CONFIG_FB_BEAT` |  |
+@@ -29,6 +29,7 @@ Layers: **K** the kernel, **L** the loader, **U** user space (through `sysctl ke
+ | `fb_ca_hz` | K | `MiniIOMobileFramebuffer.cpp` | `CONFIG_FB_CA_HZ` |  |
  | `fb_diff` | K | `MiniIOMobileFramebuffer.cpp` | `CONFIG_FB_DIFF` |  |
  | `fb_filter` | K | `MiniIOMobileFramebuffer.cpp` | `CONFIG_FB_FILTER` |  |
 +| `fb_flip` | K | `MiniIOMobileFramebuffer.cpp` | `CONFIG_FB_FLIP` |  |
  | `fb_hz` | K | `MiniIOMobileFramebuffer.cpp` | `CONFIG_FB_HZ` |  |
- | `fb_queue` | K | `MiniIOMobileFramebuffer.cpp` | `CONFIG_FB_QUEUE` |  |
- | `fb_threads` | K | `MiniIOMobileFramebuffer.cpp` | `CONFIG_FB_THREADS` |  |
+ | `fb_measure` | K | `MiniIOMobileFramebuffer.cpp` | `CONFIG_FB_MEASURE` |  |
+ | `fb_pri` | K | `MiniIOMobileFramebuffer.cpp` | `CONFIG_FB_PRI` |  |
 diff --git a/xnu/files/iokit/Kernel/GenericARMPE.cpp b/xnu/files/iokit/Kernel/GenericARMPE.cpp
-index cfaa292..6c816af 100644
+index 8af42ca..c057eb8 100644
 --- a/xnu/files/iokit/Kernel/GenericARMPE.cpp
 +++ b/xnu/files/iokit/Kernel/GenericARMPE.cpp
 @@ -300,6 +300,7 @@ GenericARMPE::start(IOService * provider)
  
- 	/* Stand-ins for the closed graphics drivers that the iOS window server talks to. */
+ 	/* Stand-ins for the closed graphics drivers that the Darwin window server talks to. */
  	MiniIOSurfaceStart(this);
 +	hakios_panel_start();       /* a panel a device's driver drives itself, up before its framebuffer (MiniIOMobileFramebuffer) */
  	MiniIOMobileFramebufferStart(this);
  	MiniAppleKeyStoreStart();
  	MiniIONetworkStackStart();
 diff --git a/xnu/files/iokit/Kernel/MiniDrivers.h b/xnu/files/iokit/Kernel/MiniDrivers.h
-index 1a35381..2f62920 100644
+index bd64f73..08927c8 100644
 --- a/xnu/files/iokit/Kernel/MiniDrivers.h
 +++ b/xnu/files/iokit/Kernel/MiniDrivers.h
 @@ -15,6 +15,8 @@
@@ -144,7 +200,7 @@ index 1a35381..2f62920 100644
  void MiniIONetworkStackStart(void);
  
 diff --git a/xnu/files/iokit/Kernel/MiniIOMobileFramebuffer.cpp b/xnu/files/iokit/Kernel/MiniIOMobileFramebuffer.cpp
-index 68e3619..97a862d 100644
+index 93d04b5..96f24ef 100644
 --- a/xnu/files/iokit/Kernel/MiniIOMobileFramebuffer.cpp
 +++ b/xnu/files/iokit/Kernel/MiniIOMobileFramebuffer.cpp
 @@ -38,6 +38,20 @@ extern struct vc_info vinfo;            /* the boot framebuffer, as the text con
@@ -166,7 +222,7 @@ index 68e3619..97a862d 100644
 +extern "C" void hakios_panel_start(void);
 +static const struct hakios_panel * gPanel;
  
- /* IOConnectCallMethod selectors of the framebuffer user client (iOS 16.5) */
+ /* IOConnectCallMethod selectors of the framebuffer user client (Darwin userland 16.5) */
  enum {
 @@ -142,6 +156,8 @@ static TUNABLE(uint32_t, gRecMegabytes, "rec_mb", 480);
  static TUNABLE(uint32_t, gRecRing, "rec_ring", 0);
@@ -177,7 +233,7 @@ index 68e3619..97a862d 100644
  /*
   * Boot-arg fb_filter=0: the picture is scaled to the panel nearest neighbour, as it once was. The
   * iPhone's 1125 x 2436 on this panel's 1080 x 2400 is 45 columns and 36 rows fewer: nearest
-@@ -227,7 +243,14 @@ class IOMobileFramebuffer : public IOService
+@@ -293,7 +309,14 @@ class IOMobileFramebuffer : public IOService
  
  public:
  	IOLock *        fLock;
@@ -193,7 +249,7 @@ index 68e3619..97a862d 100644
  	uint32_t        fPanelWidth, fPanelHeight, fRowBytes;
  	uint32_t        fWidth, fHeight;        /* the display as user space sees it */
  	MiniIOSurface * fDefaultSurface;
-@@ -249,6 +272,7 @@ public:
+@@ -315,6 +338,7 @@ public:
  	uint8_t         fSwap[SWAP_QUEUE][SWAP_SIZE];   /* the swaps on their way to the panel (fb_queue), from fSwapFirst on */
  	MiniIOSurface * fSwapSurfaces[SWAP_QUEUE][SWAP_LAYERS]; /* ... their surfaces, held from SwapEnd on: their maker may let go of them */
  	unsigned        fSwapFirst, fSwapsWaiting;
@@ -201,7 +257,7 @@ index 68e3619..97a862d 100644
  	/*
  	 * ... and not whenever the GPU happens to be done, but on a beat of the refresh rate
  	 * (boot-arg fb_beat=0: at once): frames then follow each other at an even pace whatever
-@@ -483,6 +507,31 @@ IOMobileFramebuffer::start(IOService * provider)
+@@ -590,6 +614,31 @@ IOMobileFramebuffer::start(IOService * provider)
  	return true;
  }
  
@@ -233,25 +289,33 @@ index 68e3619..97a862d 100644
  /*
   * Are the first `rows` rows of a surface, `columns` 32-bit pixels of each, inside the memory it
   * has? Its stride, element height and size come from whoever made it, so they are checked here,
-@@ -953,6 +1002,9 @@ IOMobileFramebuffer::present(const uint8_t * swap)
+@@ -1060,6 +1109,9 @@ IOMobileFramebuffer::present(const uint8_t * swap)
  		uint32_t sid = swapWord(swap, SWAP_SURFACE(layer));
  
  		fSwapSurfaces[slot][layer] = sid != 0 ? MiniIOSurfaceCopy(sid) : NULL;
 +		if (fSwapSurfaces[slot][layer] != NULL) {
-+			MiniIOSurfaceDisplayUse(fSwapSurfaces[slot][layer], 1);      /* (until it is copied: presenter) */
++			MiniIOSurfaceDisplayUse(fSwapSurfaces[slot][layer], 1);      /* (until it leaves the panel: presenter) */
 +		}
  	}
  	fSwapsWaiting++;
  	IOLockWakeup(fSwapLock, fSwap, true);
-@@ -982,6 +1034,7 @@ IOMobileFramebuffer::presenter(void)
- 		show(swap, surfaces);
+@@ -1100,6 +1152,7 @@ IOMobileFramebuffer::presenter(void)
+ 		/* the frame before is done with now, settled or not */
  		for (unsigned layer = 0; layer < SWAP_LAYERS; layer++) {
  			if (surfaces[layer] != NULL) {
 +				MiniIOSurfaceDisplayUse(surfaces[layer], -1);
  				MiniIOSurfaceDrop(surfaces[layer]);
+ 				surfaces[layer] = NULL;
  			}
- 		}
-@@ -1032,12 +1085,6 @@ IOMobileFramebuffer::show(const uint8_t * swap, MiniIOSurface ** surfaces)
+@@ -1113,6 +1166,7 @@ IOMobileFramebuffer::presenter(void)
+ 		if (!unsettled) {
+ 			for (unsigned layer = 0; layer < SWAP_LAYERS; layer++) {
+ 				if (surfaces[layer] != NULL) {
++					MiniIOSurfaceDisplayUse(surfaces[layer], -1);
+ 					MiniIOSurfaceDrop(surfaces[layer]);
+ 					surfaces[layer] = NULL;
+ 				}
+@@ -1192,12 +1246,6 @@ IOMobileFramebuffer::show(const uint8_t * swap, MiniIOSurface ** surfaces)
  		}
  	}
  	shown = began;
@@ -264,7 +328,7 @@ index 68e3619..97a862d 100644
  	IOLockLock(fLock);
  	if (fLastFrame != 0) {
  		absolutetime_to_nanoseconds(began - fLastFrame, &nanos);
-@@ -1056,6 +1103,18 @@ IOMobileFramebuffer::show(const uint8_t * swap, MiniIOSurface ** surfaces)
+@@ -1216,6 +1264,18 @@ IOMobileFramebuffer::show(const uint8_t * swap, MiniIOSurface ** surfaces)
  		    swapWord(swap, SWAP_ID), fSwapsShown, swapWord(swap, SWAP_SURFACE(0)), swapWord(swap, SWAP_SURFACE(1)),
  		    swapWord(swap, SWAP_SURFACE(2)), swapWord(swap, SWAP_SURFACE(3)), set, swapWord(swap, SWAP_LAYERS_CLEARED));
  	}
@@ -283,7 +347,7 @@ index 68e3619..97a862d 100644
  	for (unsigned layer = 0; layer < SWAP_LAYERS; layer++) {
  		uint32_t sid = swapWord(swap, SWAP_SURFACE(layer));
  		int32_t src[4], dst[4];
-@@ -1098,12 +1157,60 @@ IOMobileFramebuffer::show(const uint8_t * swap, MiniIOSurface ** surfaces)
+@@ -1258,12 +1318,60 @@ IOMobileFramebuffer::show(const uint8_t * swap, MiniIOSurface ** surfaces)
  				fGraphics = true;
  				PE_initialize_console(NULL, kPEGraphicsMode);
  			}
@@ -345,7 +409,7 @@ index 68e3619..97a862d 100644
  	drawn = mach_absolute_time();
  	if (recorded != NULL) {
  		record(recorded);
-@@ -1415,11 +1522,28 @@ IOMobileFramebufferUserClient::externalMethod(uint32_t selector, IOExternalMetho
+@@ -1580,11 +1688,28 @@ IOMobileFramebufferUserClient::externalMethod(uint32_t selector, IOExternalMetho
  		fOwner->present((const uint8_t *) args->structureInput);
  		return kIOReturnSuccess;
  
@@ -375,7 +439,7 @@ index 68e3619..97a862d 100644
  		return kIOReturnSuccess;
  	case kFBMethodSwapSignal:
  	case kFBMethodSwapCancel:
-@@ -1591,6 +1715,20 @@ MiniIOMobileFramebufferShow(const uint8_t * pixels, uint32_t width, uint32_t hei
+@@ -1756,6 +1881,20 @@ MiniIOMobileFramebufferShow(const uint8_t * pixels, uint32_t width, uint32_t hei
  	}
  }
  
@@ -397,10 +461,10 @@ index 68e3619..97a862d 100644
  MiniIOMobileFramebufferStart(IOService * provider)
  {
 diff --git a/xnu/files/iokit/Kernel/MiniIOSurface.cpp b/xnu/files/iokit/Kernel/MiniIOSurface.cpp
-index 63967e1..c86b114 100644
+index 5413c2b..a6bfd1f 100644
 --- a/xnu/files/iokit/Kernel/MiniIOSurface.cpp
 +++ b/xnu/files/iokit/Kernel/MiniIOSurface.cpp
-@@ -744,6 +744,23 @@ surfaceUnhold(MiniIOSurface * s)
+@@ -747,6 +747,23 @@ surfaceUnhold(MiniIOSurface * s)
  	s->release();
  }
  
@@ -425,7 +489,7 @@ index 63967e1..c86b114 100644
  MiniIOSurfaceCopy(uint32_t sid)
  {
 diff --git a/xnu/files/iokit/Kernel/MiniIOSurface.h b/xnu/files/iokit/Kernel/MiniIOSurface.h
-index feccca0..3c3af92 100644
+index 30539e5..2e241c7 100644
 --- a/xnu/files/iokit/Kernel/MiniIOSurface.h
 +++ b/xnu/files/iokit/Kernel/MiniIOSurface.h
 @@ -163,6 +163,8 @@ MiniIOSurface * MiniIOSurfaceCopy(uint32_t sid);

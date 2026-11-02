@@ -29,10 +29,10 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
  5 files changed, 113 insertions(+), 35 deletions(-)
 
 diff --git a/configs/boot-args.lst b/configs/boot-args.lst
-index c2f971f..7a5a4d4 100644
+index 0bbd390..f4858ba 100644
 --- a/configs/boot-args.lst
 +++ b/configs/boot-args.lst
-@@ -198,6 +198,7 @@ modem_wda_off	k
+@@ -214,6 +214,7 @@ modem_wda_off	k
  net_names	k
  net_trace	k
  pmic	k
@@ -41,19 +41,19 @@ index c2f971f..7a5a4d4 100644
  pmic_pon	k
  pmic_volume_up	k
 diff --git a/configs/common_defconfig b/configs/common_defconfig
-index c4c01da..a7178bc 100644
+index 9347286..8c01a5b 100644
 --- a/configs/common_defconfig
 +++ b/configs/common_defconfig
 @@ -2,7 +2,7 @@
  # HakiOS common defconfig: every setting there is, with what it does.
  # Made by tools/hakios-config.py listing common -o <this file>; the values are the ones that file sets, and tests/CI check that it names every symbol.
  #
--# 346 symbols in 18 groups; 36 are set, 27 of them drivers built in.
-+# 347 symbols in 18 groups; 36 are set, 27 of them drivers built in.
+-# 366 symbols in 18 groups; 36 are set, 27 of them drivers built in.
++# 367 symbols in 18 groups; 36 are set, 27 of them drivers built in.
  #
  
  #
-@@ -955,7 +955,7 @@ CONFIG_MODEM_AGAIN=y
+@@ -979,7 +979,7 @@ CONFIG_MODEM_AGAIN=y
  # CONFIG_CAM_VBLANK is not set
  
  #
@@ -62,7 +62,7 @@ index c4c01da..a7178bc 100644
  #
  
  # the vibration motor (5 is what the README's phone line uses) [needs fw-haptic/ from the phone]
-@@ -964,6 +964,9 @@ CONFIG_MODEM_AGAIN=y
+@@ -988,6 +988,9 @@ CONFIG_MODEM_AGAIN=y
  # read by hakios.haptic.c (kernel)
  # CONFIG_HAPTIC_EFFECT is not set
  
@@ -73,10 +73,10 @@ index c4c01da..a7178bc 100644
  # CONFIG_TORCH is not set
  
 diff --git a/configs/symbols.tsv b/configs/symbols.tsv
-index c65d6c3..1ecc4c1 100644
+index c338a05..e49d205 100644
 --- a/configs/symbols.tsv
 +++ b/configs/symbols.tsv
-@@ -177,6 +177,7 @@ MODEM_SIM_SWITCH_OFF	arg	modem_sim_switch_off	Cellular	k	hakios.mpss.c
+@@ -193,6 +193,7 @@ MODEM_SIM_SWITCH_OFF	arg	modem_sim_switch_off	Cellular	k	hakios.mpss.c
  MODEM_STEP	arg	modem_step	Cellular	k	hakios.mpss.c	the steps once the root is there, then back to the loader if modem_return=1 says so
  MODEM_WAIT	arg	modem_wait	Cellular	k	hakios.mpss.c	
  MODEM_WDA_OFF	arg	modem_wda_off	Cellular	k	hakios.mpss.c	
@@ -85,19 +85,19 @@ index c65d6c3..1ecc4c1 100644
  PMIC_PON	arg	pmic_pon	Touch and buttons	k	hakios.buttons.c	the power-on block: slave S, peripheral PP (default 0x013, the PMK8350's)
  PMIC_VOLUME_UP	arg	pmic_volume_up	Touch and buttons	k	hakios.buttons.c	
 diff --git a/docs/boot-args.md b/docs/boot-args.md
-index aac490a..6a2713b 100644
+index 51e73f4..2a3c5c2 100644
 --- a/docs/boot-args.md
 +++ b/docs/boot-args.md
 @@ -2,7 +2,7 @@
  
  Made by `tools/boot-args.py --markdown`; CI fails if it is out of date with the source (`tools/boot-args.py --check`).
  
--Every argument that the kernel, the loader or user space of this port reads, and which file reads it. **322 arguments**: 273 read by the kernel, 14 by the loader, 45 by user space (one is read in more than one place).
-+Every argument that the kernel, the loader or user space of this port reads, and which file reads it. **323 arguments**: 274 read by the kernel, 14 by the loader, 45 by user space (one is read in more than one place).
+-Every argument that the kernel, the loader or user space of this port reads, and which file reads it. **342 arguments**: 279 read by the kernel, 14 by the loader, 59 by user space (one is read in more than one place).
++Every argument that the kernel, the loader or user space of this port reads, and which file reads it. **343 arguments**: 280 read by the kernel, 14 by the loader, 59 by user space (one is read in more than one place).
  
  This is a catalogue of what exists and who reads it, not a manual. What an argument means is in the head of the file that reads it. The stable switches have a symbol in the configuration (`tools/hakios-config.py help SYMBOL`, `docs/configs.md`); the rest are the knobs of bring-up (a driver's steps, pauses, traces, test modes) and can change with the driver. Any of them can be given in a configuration with `CONFIG_BOOTARGS="name=value ..."`, which checks that each name is in this list.
  
-@@ -309,12 +309,13 @@ Layers: **K** the kernel, **L** the loader, **U** user space (through `sysctl ke
+@@ -317,12 +317,13 @@ Layers: **K** the kernel, **L** the loader, **U** user space (through `sysctl ke
  | `net_trace` | K | `hakios.net.c` | `CONFIG_NET_TRACE` |  |
  | `virtio_net` | K | `hakios.virtio_net.c` | `CONFIG_VIRTIO_NET` |  |
  
@@ -113,7 +113,7 @@ index aac490a..6a2713b 100644
  | `torch_max_s` | K | `hakios.torch.c` | `CONFIG_TORCH_MAX_S` |  |
  | `torch_secs` | K | `hakios.torch.c` | `CONFIG_TORCH_SECS` |  |
 diff --git a/drivers/camera/hakios.torch.c b/drivers/camera/hakios.torch.c
-index b19f57a..7ed3a2f 100644
+index df83134..5870b85 100644
 --- a/drivers/camera/hakios.torch.c
 +++ b/drivers/camera/hakios.torch.c
 @@ -1,8 +1,11 @@
@@ -131,7 +131,7 @@ index b19f57a..7ed3a2f 100644
   *
 @@ -22,7 +25,7 @@
   *
-  * What iOS's flashlight is on this machine: the loader says the camera has a flash (with torch=N,
+  * What Darwin's flashlight is on this machine: the loader says the camera has a flash (with torch=N,
   * /product/camera "flash": MobileGestalt's camera-flash, Control Center's flashlight button), and
 - * libhakios.media.dylib in mediaserverd hands FigFlashlight, which finds no camera here, a device
 + * libhakios-media.dylib in mediaserverd hands FigFlashlight, which finds no camera here, a device
@@ -334,7 +334,7 @@ index b19f57a..7ed3a2f 100644
 +		}
 +	}
  	say("torch: level %u: %s\n", level, level == 1 ? "a look, reading only" : level == 2 ? "the light on once" :
- 	    "the light for iOS");
+ 	    "the light for Darwin");
  	arb_core = ml_io_map(ARB_CORE_PHYS, ARB_CORE_SIZE);
 @@ -676,8 +746,10 @@ torch_thread(__unused void *parameter, __unused wait_result_t result)
  		say("torch: the flash module cannot be read\n");

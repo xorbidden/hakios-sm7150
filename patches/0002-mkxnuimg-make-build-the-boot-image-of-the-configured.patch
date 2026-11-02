@@ -25,10 +25,10 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
  4 files changed, 41 insertions(+), 12 deletions(-)
 
 diff --git a/Makefile b/Makefile
-index d44af8f..6f496f6 100644
+index 8ecdd0a..170acb1 100644
 --- a/Makefile
 +++ b/Makefile
-@@ -28,12 +28,14 @@
+@@ -31,12 +31,14 @@
  #   make phone               with a .config, its arguments are the kernel's; without, the phone line below
  #   FRAGMENTS="open trace"   fragments for a NAME_defconfig: make redwood_defconfig FRAGMENTS=open
  #

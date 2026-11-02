@@ -22,10 +22,10 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
  1 file changed, 136 insertions(+)
 
 diff --git a/userland/src/inject.c b/userland/src/inject.c
-index fb9f6b2..a9a5bb6 100644
+index 217e8fa..06ba6a1 100644
 --- a/userland/src/inject.c
 +++ b/userland/src/inject.c
-@@ -541,6 +541,141 @@ window_server_fixes(void)
+@@ -542,6 +542,141 @@ window_server_fixes(void)
  	    orig_finish_update && orig_renderer && orig_render_update ? "installed" : "INCOMPLETE");
  }
  
@@ -167,7 +167,7 @@ index fb9f6b2..a9a5bb6 100644
  /* ---- backboardd: no ambient light sensor ------------------------------------------------------------ */
  
  /*
-@@ -1126,6 +1261,7 @@ hakios_init(void)
+@@ -1220,6 +1355,7 @@ hakios_init(void)
  		}
  		opengl_es();
  		window_server_fixes();

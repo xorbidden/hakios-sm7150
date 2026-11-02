@@ -19,15 +19,15 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
  3 files changed, 16 insertions(+), 10 deletions(-)
 
 diff --git a/configs/common_defconfig b/configs/common_defconfig
-index 17d9bdd..288e7fc 100644
+index 6cf4dde..67d27cb 100644
 --- a/configs/common_defconfig
 +++ b/configs/common_defconfig
 @@ -2,7 +2,7 @@
  # HakiOS common defconfig: every setting there is, with what it does.
  # Made by tools/hakios-config.py listing common -o <this file>; the values are the ones that file sets, and tests/CI check that it names every symbol.
  #
--# 344 symbols in 18 groups; 34 are set, 25 of them drivers built in.
-+# 345 symbols in 18 groups; 35 are set, 26 of them drivers built in.
+-# 364 symbols in 18 groups; 34 are set, 25 of them drivers built in.
++# 365 symbols in 18 groups; 35 are set, 26 of them drivers built in.
  #
  
  #
@@ -76,7 +76,7 @@ index 3d665a5..c8a3516 100644
  | wifi | `WIFI` (requires QMI) | |
  | bluetooth | `BT` | |
 diff --git a/drivers/audio/conf b/drivers/audio/conf
-index a62e9eb..e51385c 100644
+index eeb9a3d..5c2bb51 100644
 --- a/drivers/audio/conf
 +++ b/drivers/audio/conf
 @@ -15,12 +15,16 @@ driver SPEAKER

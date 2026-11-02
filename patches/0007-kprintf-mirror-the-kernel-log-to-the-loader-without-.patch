@@ -68,10 +68,10 @@ index d91d0c7..0d5d0f8 100644
  	}
  	if (!loader_return_entered && debug_buf_base != NULL && debug_buf_ptr > debug_buf_base &&
 diff --git a/xnu/hakios.patch b/xnu/hakios.patch
-index 0386087..0c68734 100644
+index 3bade39..1d0e65d 100644
 --- a/xnu/hakios.patch
 +++ b/xnu/hakios.patch
-@@ -921,6 +921,26 @@ index 003cfb074a99..c597065f24f1 100644
+@@ -977,6 +977,26 @@ index 003cfb074a99..c597065f24f1 100644
   
   	if (sock == NULL) {
   		return EINVAL;
@@ -98,7 +98,7 @@ index 0386087..0c68734 100644
  diff --git a/bsd/kern/sys_generic.c b/bsd/kern/sys_generic.c
  index 4ca22ee4371a..e95e618b4cb6 100644
  --- a/bsd/kern/sys_generic.c
-@@ -3246,18 +3266,28 @@ index 3ad743fc3efb..ce036c5a2c26 100644
+@@ -3344,18 +3364,28 @@ index 3ad743fc3efb..ce036c5a2c26 100644
   void
   pe_init_fiq()
  diff --git a/pexpert/arm/pe_kprintf.c b/pexpert/arm/pe_kprintf.c

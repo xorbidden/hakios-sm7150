@@ -22,12 +22,12 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
  1 file changed, 12 insertions(+), 3 deletions(-)
 
 diff --git a/userland/src/inject_sb.c b/userland/src/inject_sb.c
-index e902ca4..a9cdac2 100644
+index 880ac16..0edeb70 100644
 --- a/userland/src/inject_sb.c
 +++ b/userland/src/inject_sb.c
 @@ -547,13 +547,20 @@ battery_state(id self, SEL sel)
   * UIKitCore's status-bar view has its own presentation policy, separate from UIDevice. With the power
-  * source it is iOS's own again: the switch Battery Percentage in Settings > Battery, which the image
+  * source it is Darwin's own again: the switch Battery Percentage in Settings > Battery, which the image
   * turns on (SBShowBatteryPercentage in userland/var/mobile/Library/Preferences/com.apple.springboard.plist).
 + * As on an iPhone, the number gives way to the bolt while a charger is in (battery_view_should_show_bolt).
   */

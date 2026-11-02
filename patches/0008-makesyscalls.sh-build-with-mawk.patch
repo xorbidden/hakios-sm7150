@@ -17,10 +17,10 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
  1 file changed, 21 insertions(+)
 
 diff --git a/xnu/hakios.patch b/xnu/hakios.patch
-index 0c68734..795313c 100644
+index 1d0e65d..9580ca8 100644
 --- a/xnu/hakios.patch
 +++ b/xnu/hakios.patch
-@@ -921,6 +921,27 @@ index 003cfb074a99..c597065f24f1 100644
+@@ -977,6 +977,27 @@ index 003cfb074a99..c597065f24f1 100644
   
   	if (sock == NULL) {
   		return EINVAL;
